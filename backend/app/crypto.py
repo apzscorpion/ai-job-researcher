@@ -26,23 +26,14 @@ def _load_or_generate_key() -> Fernet:
     import app.config  # noqa: F401  (loads .env)
 
     raw = os.environ.get("FERNET_KEY", "")
-    if raw:
-        try:
-            # Accept raw base64url key or URL-safe base64 directly
-            key_bytes = raw.encode() if isinstance(raw, str) else raw
-            # Validate by constructing Fernet
-            return Fernet(key_bytes)
-        except Exception:
-            logger.warning(
-                "FERNET_KEY is set but invalid — generating a temporary key. "
-                "Previously encrypted values will not be recoverable."
-            )
-    key = Fernet.generate_key()
-    logger.warning(
-        "FERNET_KEY not set — using a temporary key. Saved SMTP/Gemini secrets "
-        "will be unreadable after restart; set FERNET_KEY in .env."
-    )
-    return Fernet(key)
+    try:
+        return Fernet(raw.encode())
+    except Exception:
+        # A temporary key would silently make every saved password and API key unreadable after a restart
+        raise RuntimeError(
+            "FERNET_KEY must be set in .env to a valid key "
+            "(python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\")"
+        ) from None
 
 
 _fernet: Fernet = _load_or_generate_key()

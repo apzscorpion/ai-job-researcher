@@ -258,6 +258,9 @@ _NO_AI = ("No AI replied: every cloud key may be out of quota for today and Olla
 
 async def _ai_context(job_id: int, user_id: int, session: Session):
     """(job with the fullest description we can get, profile, providers, where the description came from)."""
+    from app.security import rate_limit
+
+    rate_limit(f"ai-doc:{user_id}", 30, 3600, "That's a lot of AI documents for one hour — try again later")
     from app.models import Profile, Settings
     from app.services import llm, sources
 
@@ -345,6 +348,10 @@ def trigger_search(
     background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
 ) -> Dict[str, bool]:
+    from app.security import rate_limit
+
+    # Each search scrapes several job boards: spamming it gets the server's IP banned
+    rate_limit(f"search:{current_user.id}", 1, 600, "A search ran in the last 10 minutes — results are on their way")
     background_tasks.add_task(_run_search_bg, current_user.id)
     return {"queued": True}
 

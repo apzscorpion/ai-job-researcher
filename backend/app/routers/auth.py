@@ -6,14 +6,18 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordRequestForm
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from sqlmodel import Session, select
 
 from app.auth import create_token, get_current_user, hash_password, verify_password
 from app.db import get_session
 from app.models import Profile, Settings, User
+from app.security import rate_limit
+
+# bcrypt hash of a random string: unknown emails still cost one bcrypt check, so timing doesn't reveal them
+_DUMMY_HASH = hash_password("not-a-real-password-8f3a1c")
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -24,7 +28,7 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 class RegisterRequest(BaseModel):
     email: EmailStr
-    password: str
+    password: str = Field(min_length=8, max_length=128)
 
 
 class TokenResponse(BaseModel):
@@ -43,16 +47,20 @@ class MeResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
-def register(body: RegisterRequest, session: Session = Depends(get_session)) -> TokenResponse:
+def register(body: RegisterRequest, request: Request, session: Session = Depends(get_session)) -> TokenResponse:
     """Create a new user account along with default Profile and Settings rows."""
-    existing = session.exec(select(User).where(User.email == body.email)).first()
+    rate_limit(f"register:{request.client.host if request.client else '?'}", 5, 3600)
+    if body.password.lower() in body.email.lower() or len(set(body.password)) < 4:
+        raise HTTPException(status_code=422, detail="Choose a stronger password (8+ characters, not your email)")
+    email = body.email.lower()
+    existing = session.exec(select(User).where(User.email == email)).first()
     if existing:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Email already registered",
         )
 
-    user = User(email=body.email, hashed_password=hash_password(body.password))
+    user = User(email=email, hashed_password=hash_password(body.password))
     session.add(user)
     session.flush()  # populate user.id
 
@@ -73,12 +81,17 @@ def register(body: RegisterRequest, session: Session = Depends(get_session)) -> 
 
 @router.post("/login", response_model=TokenResponse)
 def login(
+    request: Request,
     form_data: OAuth2PasswordRequestForm = Depends(),
     session: Session = Depends(get_session),
 ) -> TokenResponse:
     """Authenticate with email + password and return a JWT."""
-    user = session.exec(select(User).where(User.email == form_data.username)).first()
-    if not user or not verify_password(form_data.password, user.hashed_password):
+    email = form_data.username.strip().lower()[:254]
+    rate_limit(f"login-ip:{request.client.host if request.client else '?'}", 20, 900)
+    rate_limit(f"login-email:{email}", 8, 900, "Too many login attempts for this account — wait 15 minutes")
+    user = session.exec(select(User).where(User.email == email)).first()
+    ok = verify_password(form_data.password[:128], user.hashed_password if user else _DUMMY_HASH)
+    if not user or not ok:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid credentials",

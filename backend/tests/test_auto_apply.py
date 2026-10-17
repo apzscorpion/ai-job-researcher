@@ -55,7 +55,9 @@ def test_resume_titles_and_relevance():
 def test_usable_recruiter_email():
     assert usable_recruiter_email("careers@acme.io")
     assert usable_recruiter_email("jane.doe+jobs@acme.co.uk")
-    for bad in ("noreply@acme.io", "privacy@acme.io", "do-not-reply@x.com", "not-an-email", None, ""):
+    for bad in ("noreply@acme.io", "privacy@acme.io", "do-not-reply@x.com", "not-an-email", None, "",
+                "ethiquegroup@meritis.fr", ".external@agcocorp.com", "compliance@acme.io",
+                "hiring@email.com", "hrbenefits@acme.io", "paramountaccommodations@paramount.com"):
         assert not usable_recruiter_email(bad)
 
 
@@ -166,6 +168,7 @@ def test_email_attaches_resume_and_cover_letter(tmp_path, monkeypatch):
         def sendmail(self, frm, to, raw): sent["raw"] = raw
 
     monkeypatch.setattr(smtplib, "SMTP", FakeSMTP)
+    monkeypatch.setattr("app.security.check_public_host", lambda *a: None)
     assert mailer.send_email("hr@c.com", "s", "b", str(resume), "h", 587, "u", "p", "me@x.com", True, [cover])
     assert 'filename="cv.pdf"' in sent["raw"] and "Cover_Letter_Asha_Rao.docx" in sent["raw"]
 
@@ -178,3 +181,11 @@ def test_apply_options():
     job.recruiter_email, job.apply_url = "hr@c.com", "https://jobs.lever.co/c/1"
     assert apply_options(job) == ["email", "linkedin", "site"]
     assert apply_options(Job(user_id=1, title="t", company="c", url="u", source="remotive")) == ["site"]
+
+
+def test_scraped_email_prefers_hiring_address_and_drops_trailing_dot():
+    from app.services.sources import _job
+
+    j = _job("Dev", "Acme", "u", "x", description="Questions: privacy@acme.io. Apply: jobs@acme.io.")
+    assert j["recruiter_email"] == "jobs@acme.io"
+    assert _job("Dev", "A", "u", "x", description="via @agcocorp.com or .external@agcocorp.com")["recruiter_email"] is None

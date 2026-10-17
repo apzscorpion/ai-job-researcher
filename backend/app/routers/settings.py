@@ -8,19 +8,21 @@ from __future__ import annotations
 import json
 import re
 import secrets
-from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional
+from typing import Annotated, Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlmodel import Session, select
 
 from app.auth import get_current_user
 from app import crypto
 from app.db import get_session
-from app.config import BROWSERS_DIR
 from app.models import Settings, User, json_decode, json_encode
+from app.security import check_public_host, check_public_url
 from app.services.scheduler import user_tz
+
+Short = Annotated[str, Field(max_length=200)]
+Long = Annotated[str, Field(max_length=2000)]
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -39,10 +41,10 @@ def _providers(s: Settings) -> List[Dict[str, str]]:
 class ProviderIn(BaseModel):
     id: Optional[str] = None
     kind: Literal["gemini", "openai"]
-    name: str = ""
-    base_url: str = ""
-    model: str = ""
-    key: str = ""  # empty or masked = keep the stored key for this id
+    name: Short = ""
+    base_url: Short = ""
+    model: Short = ""
+    key: Annotated[str, Field(max_length=500)] = ""  # empty or masked = keep the stored key for this id
 
 
 def _merge_providers(s: Settings, incoming: List[ProviderIn]) -> List[Dict[str, str]]:
@@ -50,8 +52,14 @@ def _merge_providers(s: Settings, incoming: List[ProviderIn]) -> List[Dict[str, 
     stored = {p["id"]: p for p in _providers(s) if p.get("id")}
     merged = []
     for p in incoming:
-        if p.kind == "openai" and not re.match(r"^(https://|http://(localhost|127\.0\.0\.1)[:/])", p.base_url):
-            raise HTTPException(status_code=422, detail=f"Base URL for {p.name or 'provider'} must start with https://")
+        if p.kind == "openai":
+            # The server calls this URL with the key: only public https APIs, never the server's own network
+            try:
+                if any(c in p.base_url for c in "?#@"):
+                    raise ValueError("no query, fragment or credentials allowed")
+                check_public_url(p.base_url.strip(), ("https",))
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=f"Base URL for {p.name or 'provider'}: {exc}")
         if p.kind == "openai" and not p.model.strip():
             raise HTTPException(status_code=422, detail=f"Model is required for {p.name or 'provider'}")
         pid = p.id or secrets.token_hex(4)
@@ -118,34 +126,34 @@ def get_settings(
 # ---------------------------------------------------------------------------
 
 class SettingsUpdate(BaseModel):
-    smtp_host: Optional[str] = None
-    smtp_port: Optional[int] = None
-    smtp_user: Optional[str] = None
-    smtp_password: Optional[str] = None   # plain text; will be encrypted
-    smtp_from: Optional[str] = None
+    smtp_host: Optional[Short] = None
+    smtp_port: Optional[Literal[25, 465, 587, 2525]] = None
+    smtp_user: Optional[Short] = None
+    smtp_password: Optional[Short] = None   # plain text; will be encrypted
+    smtp_from: Optional[Short] = None
     smtp_tls: Optional[bool] = None
-    gemini_key: Optional[str] = None      # plain text; will be encrypted
-    ai_providers: Optional[List[ProviderIn]] = None
-    standard_answers: Optional[Dict[str, str]] = None
+    gemini_key: Optional[Annotated[str, Field(max_length=500)]] = None      # plain text; will be encrypted
+    ai_providers: Optional[Annotated[List[ProviderIn], Field(max_length=10)]] = None
+    standard_answers: Optional[Annotated[Dict[Short, Long], Field(max_length=50)]] = None
     auto_send_email: Optional[bool] = None
-    target_locations: Optional[List[str]] = None
+    target_locations: Optional[Annotated[List[Short], Field(max_length=20)]] = None
     remote_ok: Optional[bool] = None
-    min_salary: Optional[int] = None
-    min_rating: Optional[float] = None
-    excluded_companies: Optional[List[str]] = None
-    excluded_keywords: Optional[List[str]] = None
+    min_salary: Optional[Annotated[int, Field(ge=0, le=100_000_000)]] = None
+    min_rating: Optional[Annotated[float, Field(ge=0, le=5)]] = None
+    excluded_companies: Optional[Annotated[List[Short], Field(max_length=200)]] = None
+    excluded_keywords: Optional[Annotated[List[Short], Field(max_length=200)]] = None
     ignore_degree: Optional[bool] = None
     ignore_yoe_gap: Optional[bool] = None
-    yoe_tolerance: Optional[int] = None
+    yoe_tolerance: Optional[Annotated[int, Field(ge=0, le=20)]] = None
     partial_skills_ok: Optional[bool] = None
-    score_threshold: Optional[int] = None
+    score_threshold: Optional[Annotated[int, Field(ge=0, le=10)]] = None
     use_gemini_scoring: Optional[bool] = None
-    daily_cap: Optional[int] = None
-    apply_start_hour: Optional[int] = None
-    apply_end_hour: Optional[int] = None
-    search_interval_hours: Optional[int] = None
+    daily_cap: Optional[Annotated[int, Field(ge=0, le=100)]] = None
+    apply_start_hour: Optional[Annotated[int, Field(ge=0, le=23)]] = None
+    apply_end_hour: Optional[Annotated[int, Field(ge=1, le=24)]] = None
+    search_interval_hours: Optional[Annotated[int, Field(ge=1, le=168)]] = None
     auto_apply_enabled: Optional[bool] = None
-    timezone: Optional[str] = None
+    timezone: Optional[Short] = None
 
 
 @router.put("", include_in_schema=False)
@@ -157,8 +165,13 @@ def update_settings(
 ) -> Dict[str, Any]:
     s = _get_settings(current_user.id, session)
 
+    if body.smtp_host:
+        try:  # the server connects here: never to its own network
+            check_public_host(body.smtp_host.strip(), body.smtp_port or s.smtp_port)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=f"SMTP host: {exc}")
     if body.smtp_host is not None:
-        s.smtp_host = body.smtp_host
+        s.smtp_host = body.smtp_host.strip()
     if body.smtp_port is not None:
         s.smtp_port = body.smtp_port
     if body.smtp_user is not None:
@@ -245,83 +258,65 @@ def test_email(
 
 
 # ---------------------------------------------------------------------------
-# POST /connect-browser/{platform}
+# Job-site connections (Settings → Job sites)
 # ---------------------------------------------------------------------------
 
-SUPPORTED_PLATFORMS = {"linkedin", "naukri"}
-
-
-def _launch_browser_bg(user_id: int, platform: str) -> None:
-    """Background task that opens the browser for the user to log in."""
-    import asyncio
+def _resume_platform(user_id: int, platform: str) -> None:
+    """Signed back in: auto-apply may use this site again."""
     from app.db import engine
-    from app.services.browser_apply import launch_for_login
 
-    if asyncio.run(launch_for_login(user_id, platform)):
-        # Logged in again: resume auto-apply on this site
-        with Session(engine) as session:
-            s = _get_settings(user_id, session)
-            pauses = json_decode(s.platform_pauses, {}) or {}
-            if pauses.pop(platform, None):
-                s.platform_pauses = json.dumps(pauses)
-                session.add(s)
-                session.commit()
+    with Session(engine) as session:
+        s = _get_settings(user_id, session)
+        pauses = json_decode(s.platform_pauses, {}) or {}
+        if pauses.pop(platform, None):
+            s.platform_pauses = json.dumps(pauses)
+            session.add(s)
+            session.commit()
 
 
-class BrowserConnectBody(BaseModel):
-    platform: str
+async def _connect_bg(user_id: int, site: str) -> None:
+    from app.services import connections
+
+    if await connections.connect(user_id, site) and site in ("linkedin", "naukri"):
+        _resume_platform(user_id, site)
 
 
-@router.post("/browser/connect", include_in_schema=False)
-def connect_browser_alias(
-    body: BrowserConnectBody,
-    background_tasks: BackgroundTasks,
-    current_user: User = Depends(get_current_user),
-) -> Dict[str, Any]:
-    return connect_browser(body.platform, background_tasks, current_user)
-
-
-@router.post("/connect-browser/{platform}")
-def connect_browser(
-    platform: str,
-    background_tasks: BackgroundTasks,
-    current_user: User = Depends(get_current_user),
-) -> Dict[str, Any]:
-    if platform not in SUPPORTED_PLATFORMS:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Unsupported platform '{platform}'. Choose from: {SUPPORTED_PLATFORMS}",
-        )
-    background_tasks.add_task(_launch_browser_bg, current_user.id, platform)
-    return {"launched": True, "platform": platform}
-
-
-# ---------------------------------------------------------------------------
-# GET /browser-status
-# ---------------------------------------------------------------------------
-
-@router.get("/browser/status", include_in_schema=False)
-@router.get("/browser-status")
-def browser_status(
+@router.get("/job-sites")
+async def job_sites(
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ) -> Dict[str, Any]:
+    """Every job site with its signed-in state, read from the saved browser profiles ("Sync all")."""
     from datetime import datetime, timezone
+
+    from app.services import connections
     from app.services.scheduler import active_pauses
 
-    uid = current_user.id
-    linkedin_dir = BROWSERS_DIR / str(uid) / "linkedin"
-    naukri_dir = BROWSERS_DIR / str(uid) / "naukri"
-
-    def _has_session(path: Path) -> bool:
-        # A Playwright persistent context stores its state in a directory;
-        # we consider it valid if the directory exists and is non-empty.
-        return path.is_dir() and any(path.iterdir())
-
-    s = _get_settings(uid, session)
+    states = await connections.check_all(current_user.id)
+    for platform in ("linkedin", "naukri"):
+        if states.get(platform) == "signed_in":
+            _resume_platform(current_user.id, platform)
+    session.expire_all()
+    paused = active_pauses(_get_settings(current_user.id, session).platform_pauses, datetime.now(timezone.utc))
     return {
-        "linkedin": _has_session(linkedin_dir),
-        "naukri": _has_session(naukri_dir),
-        # {platform: reason} — auto-apply skips these sites until the user reconnects (or 24 h after a captcha)
-        "paused": active_pauses(s.platform_pauses, datetime.now(timezone.utc)),
+        "sites": [{"id": k, "name": v["name"], "url": v["url"], "state": states.get(k, "not_connected"),
+                   "checks_login": bool(v["cookie"]), "paused": paused.get(k)}
+                  for k, v in connections.SITES.items()],
     }
+
+
+@router.post("/job-sites/{site}/connect")
+def connect_job_site(
+    site: str,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    from app.services import connections
+
+    if site not in connections.SITES:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown job site")
+    if connections.busy(current_user.id, site):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                            detail="That browser is already open or applying — finish there, then try again")
+    background_tasks.add_task(_connect_bg, current_user.id, site)
+    return {"launched": True, "site": site}

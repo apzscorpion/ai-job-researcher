@@ -18,8 +18,9 @@ export default function LogViewer({ isOpen, onClose }) {
         if (isMounted && data && Array.isArray(data.logs)) {
           setLogs(data.logs)
         }
-      } catch {
-        /* ignore polling errors */
+      } catch (err) {
+        // e.g. 403 for non-admin accounts: say why instead of showing an empty panel
+        if (isMounted) setLogs([{ time: '', level: 'WARNING', name: '', message: err.message }])
       }
     }
 

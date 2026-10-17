@@ -3,7 +3,6 @@ Browser-based job application automation using async Playwright.
 
 Provides:
     get_browser_context(user_id, platform) -> (Playwright, Browser, BrowserContext)
-    launch_for_login(user_id, platform) -> bool
     fill_form(page, scope, profile, settings, extra) -> unanswered required questions
     apply_linkedin(job, profile, settings, user_id) -> (status, note)
     apply_naukri(job, profile, settings, user_id) -> (status, note)
@@ -32,11 +31,6 @@ logger = logging.getLogger(__name__)
 PLATFORM_URLS = {
     "linkedin": "https://www.linkedin.com/jobs",
     "naukri": "https://www.naukri.com",
-}
-
-LOGIN_URLS = {
-    "linkedin": "https://www.linkedin.com/login",
-    "naukri": "https://www.naukri.com/nlogin/login",
 }
 
 # Logged-in indicator selectors
@@ -142,54 +136,6 @@ async def get_browser_context(
     )
     # launch_persistent_context returns the context directly; browser is embedded
     return p, None, context
-
-
-# ---------------------------------------------------------------------------
-# Login flow
-# ---------------------------------------------------------------------------
-
-async def launch_for_login(user_id: int, platform: str) -> bool:
-    """Open a visible browser to the platform login page and wait for the user.
-
-    Returns True when a logged-in indicator is detected (up to 120 s).
-    """
-    if platform not in LOGIN_URLS:
-        logger.error("launch_for_login: unknown platform '%s'", platform)
-        return False
-
-    p, _, context = await get_browser_context(user_id, platform, headless=False)
-    try:
-        page = await context.new_page()
-        await page.goto(LOGIN_URLS[platform], wait_until="domcontentloaded")
-
-        indicator = LOGGED_IN_SELECTORS.get(platform, "")
-        if indicator:
-            try:
-                await page.wait_for_selector(indicator, timeout=120_000)
-                logger.info(
-                    "launch_for_login: user_id=%s logged into %s successfully",
-                    user_id,
-                    platform,
-                )
-                return True
-            except Exception:
-                logger.warning(
-                    "launch_for_login: timed out waiting for login indicator on %s",
-                    platform,
-                )
-        return False
-    except Exception:
-        logger.exception("launch_for_login: error for user_id=%s platform=%s", user_id, platform)
-        return False
-    finally:
-        try:
-            await context.close()
-        except Exception:
-            pass
-        try:
-            await p.stop()
-        except Exception:
-            pass
 
 
 # ---------------------------------------------------------------------------
@@ -439,9 +385,9 @@ async def apply_linkedin(
 
         if "checkpoint" in page.url:
             return "paused", ("LinkedIn asked for a security check. Open linkedin.com in your own browser, "
-                              "complete it, then reconnect in Settings → Browser Sessions.")
+                              "complete it, then reconnect in Settings → Job sites.")
         if not await _linkedin_logged_in(page):
-            return "paused", "LinkedIn is logged out. Reconnect it in Settings → Browser Sessions."
+            return "paused", "LinkedIn is logged out. Reconnect it in Settings → Job sites."
 
         await _read_like_a_person(page)
 
@@ -527,7 +473,7 @@ async def apply_naukri(
 
         if (await page.locator(LOGGED_IN_SELECTORS["naukri"]).count() == 0
                 or await page.locator("button:has-text('Login to apply'), button:has-text('Register to apply')").count() > 0):
-            return "paused", "Naukri is logged out. Reconnect it in Settings → Browser Sessions."
+            return "paused", "Naukri is logged out. Reconnect it in Settings → Job sites."
 
         await _read_like_a_person(page)
 

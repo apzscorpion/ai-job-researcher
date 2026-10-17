@@ -21,10 +21,12 @@ from sqlmodel import Session, select
 
 from app.config import EMBED_MODEL, OLLAMA_MODEL, OLLAMA_URL
 from app.models import ActivityLog, Job, Profile, Settings, json_decode
+from app.security import http_url_or_none
 
 logger = logging.getLogger(__name__)
 
-_EMAIL_REGEX = re.compile(r"[\w.+\-]+@[\w\-]+\.[\w.]+")
+# Not glued to a preceding "." (".external@x.com" is prose, not an inbox); no trailing "." from the sentence
+_EMAIL_REGEX = re.compile(r"(?<![\w.+\-])\w[\w.+\-]*@[\w\-]+(?:\.[\w\-]+)+")
 _HTTP_TIMEOUT = httpx.Timeout(20.0)
 _HEADERS = {"User-Agent": "ai-job-researcher/1.0 (personal job search)"}
 
@@ -80,8 +82,12 @@ async def fetch_description(url: str) -> str:
     if not url.startswith(("http://", "https://")):
         return ""
     try:
+        from app.security import block_private_hook
+
+        # scraped link: every hop (redirects too) must stay on the public internet
         async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT, follow_redirects=True,
-                                     headers={"User-Agent": "Mozilla/5.0"}) as client:
+                                     headers={"User-Agent": "Mozilla/5.0"},
+                                     event_hooks={"request": [block_private_hook]}) as client:
             resp = await client.get(url)
             resp.raise_for_status()
     except httpx.HTTPError as exc:
@@ -120,13 +126,25 @@ def _cell(row, key: str) -> Any:
     return None if value is None or (not isinstance(value, (list, dict)) and pd.isna(value)) else value
 
 
+def _safe_apply_url(url: Optional[str]) -> Optional[str]:
+    """http(s) links, or mailto: with a usable address; anything else (javascript:, data:…) is dropped."""
+    from app.services.mailer import usable_recruiter_email
+
+    if url and url.lower().startswith("mailto:"):
+        return url if usable_recruiter_email(url[7:].split("?")[0]) else None
+    return http_url_or_none(url)
+
+
 def _job(title: str, company: str, url: str, source: str, **extra: Any) -> Dict[str, Any]:
     description = extra.get("description") or ""
-    emails = _EMAIL_REGEX.findall(description)
+    from app.services.mailer import usable_recruiter_email
+
+    found = _EMAIL_REGEX.findall(description)
+    emails = [e for e in found if usable_recruiter_email(e)] or found  # a hiring address beats privacy@ etc.
     return {
         "title": title,
         "company": company or "Unknown",
-        "url": url,
+        "url": http_url_or_none(url) or "",  # scraped: never store javascript:/data: links
         "source": source,
         "location": extra.get("location"),
         "description": description,
@@ -134,7 +152,7 @@ def _job(title: str, company: str, url: str, source: str, **extra: Any) -> Dict[
         "salary_max": extra.get("salary_max"),
         "company_rating": extra.get("company_rating"),
         "recruiter_email": emails[0] if emails else None,
-        "apply_url": extra.get("apply_url") or None,
+        "apply_url": _safe_apply_url(extra.get("apply_url")),
         "is_remote": bool(extra.get("is_remote")),
     }
 
@@ -432,7 +450,7 @@ async def _run_search(user_id: int, session: Session) -> None:
 
     # Every source returns loosely matched results; keep only jobs relevant to the résumé
     fetched = len(all_raw_jobs)
-    all_raw_jobs = [j for j in all_raw_jobs if relevant(j, target_titles, skills)]
+    all_raw_jobs = [j for j in all_raw_jobs if j["url"] and relevant(j, target_titles, skills)]
     logger.info("run_search: kept %d of %d results relevant to the résumé (titles %s)",
                 len(all_raw_jobs), fetched, target_titles)
 

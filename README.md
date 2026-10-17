@@ -116,3 +116,15 @@ pytest tests/ -v
 | `OLLAMA_MODEL` | Chat model (default: qwen2.5:7b) |
 | `EMBED_MODEL` | Embedding model (default: nomic-embed-text) |
 
+
+## Releasing publicly
+
+- Fill `SECRET_KEY` and `FERNET_KEY` in `.env` (the app won't start without them), set `ALLOWED_ORIGINS`
+  to your site's address and `ADMIN_EMAILS` to the operator's login. Leave `API_DOCS=0`.
+- Build the frontend (`npm run build`) and serve `frontend/dist` plus `/api` (proxied to uvicorn on
+  127.0.0.1:8000) from one HTTPS host, e.g. Caddy or nginx. Send the same Content-Security-Policy as
+  `vite.config.js` as a header, plus `frame-ancestors 'none'`.
+- Run uvicorn with a single worker (rate limits and browser locks live in memory) and
+  `--proxy-headers --forwarded-allow-ips 127.0.0.1` so login limits see real client IPs.
+- "Connect" on Settings → Job sites opens a browser window **on the server**, so job-site logins only
+  work when the server is the user's own computer.

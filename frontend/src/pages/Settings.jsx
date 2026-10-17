@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import {
   getSettings, updateSettings,
-  testEmail, connectBrowser, getBrowserStatus,
+  testEmail, connectJobSite, getJobSites,
 } from '../api'
 import Spinner from '../components/Spinner'
 
@@ -98,8 +98,9 @@ export default function Settings() {
   const [exclMsg, setExclMsg]       = useState('')
   const [exclErr, setExclErr]       = useState('')
 
-  // Browser status
-  const [browserStatus, setBrowserStatus] = useState({})
+  // Job-site connections
+  const [sites, setSites]                 = useState([])
+  const [syncing, setSyncing]             = useState(false)
   const [connectingPlatform, setConnectingPlatform] = useState(null)
   const [connectMsg, setConnectMsg]   = useState('')
   const [connectErr, setConnectErr]   = useState('')
@@ -175,10 +176,12 @@ export default function Settings() {
   }, [])
 
   const loadBrowserStatus = useCallback(async () => {
+    setSyncing(true)
     try {
-      const data = await getBrowserStatus()
-      setBrowserStatus(data || {})
-    } catch { /* ignore */ }
+      const data = await getJobSites()
+      setSites(data.sites || [])
+    } catch (err) { setConnectErr(err.message) }
+    finally { setSyncing(false) }
   }, [])
 
   useEffect(() => {
@@ -320,9 +323,9 @@ export default function Settings() {
     setConnectMsg(''); setConnectErr('')
     setConnectingPlatform(platform)
     try {
-      const res = await connectBrowser(platform)
-      setConnectMsg(res?.message || `Browser launched for ${platform} — please log in manually.`)
-      setTimeout(() => loadBrowserStatus(), 5000)
+      await connectJobSite(platform)
+      setConnectMsg('A browser window is opening on this computer. Log in there, then close the window ' +
+                    '(LinkedIn and Naukri close by themselves once you are in). Then click “Sync all”.')
     } catch (err) { setConnectErr(err.message) }
     finally { setConnectingPlatform(null) }
   }
@@ -631,38 +634,45 @@ export default function Settings() {
         </form>
       </Section>
 
-      {/* ── Browser Sessions ─────────────────────────────── */}
-      <Section title="Browser Sessions" icon="🌐">
+      {/* ── Job sites ────────────────────────────────────── */}
+      <Section title="Job sites" icon="🌐">
         <p className="form-hint" style={{ marginBottom: '0.75rem' }}>
-          Click Connect, then log in within 2 minutes in the browser window that opens. To protect your accounts,
-          auto-apply sends at most 15 LinkedIn and 10 Naukri applications a day, waits 8–20 minutes between them,
-          and pauses a site as soon as it shows a login page, security check or captcha.
+          Sign in to each job site once. Applying then uses your signed-in browser — LinkedIn and Naukri for
+          their own apply, and every other site's login for company pages (e.g. RemoteOK only shows the
+          employer's link to signed-in users). Your passwords are never seen or stored by this app; only the
+          browser keeps you signed in, like your normal browser does. To protect your accounts, auto-apply sends
+          at most 15 LinkedIn and 10 Naukri applications a day, 8–20 minutes apart, and pauses a site as soon
+          as it shows a login page, security check or captcha.
         </p>
+        <button className="btn btn-secondary btn-sm" onClick={loadBrowserStatus} disabled={syncing}
+          style={{ marginBottom: '0.75rem' }}>
+          {syncing ? <><Spinner size="sm" /> Checking every site…</> : '🔄 Sync all'}
+        </button>
         {connectMsg && <div className="alert alert-info">ℹ️ {connectMsg}</div>}
         {connectErr && <div className="alert alert-error">⚠️ {connectErr}</div>}
-        {['linkedin', 'naukri'].map(platform => {
-          const pausedReason = browserStatus.paused?.[platform]
-          const isConnected = browserStatus[platform] === true && !pausedReason
+        {sites.map(site => {
+          const STATE = {
+            signed_in:     ['Signed in', '#16a34a'],
+            saved:         ['Connected (this site can\'t be checked automatically — reconnect if applying fails)', '#16a34a'],
+            signed_out:    ['Signed out — connect again', '#dc2626'],
+            busy:          ['In use right now (applying or a login window is open)', '#d97706'],
+            not_connected: ['Not connected', '#94a3b8'],
+          }
+          const [label, color] = site.paused ? [`Paused — ${site.paused}`, '#dc2626'] : STATE[site.state] || STATE.not_connected
+          const ok = !site.paused && ['signed_in', 'saved'].includes(site.state)
           return (
-            <div key={platform} className="browser-status-row">
+            <div key={site.id} className="browser-status-row">
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                <span className={`connected-dot ${isConnected ? 'active' : 'inactive'}`} />
-                <span style={{ fontWeight: 600, textTransform: 'capitalize' }}>{platform}</span>
-                <span style={{ fontSize: '0.8rem', color: isConnected ? '#16a34a' : pausedReason ? '#dc2626' : '#94a3b8' }}>
-                  {pausedReason ? `Paused — ${pausedReason}` : isConnected ? 'Session saved' : 'Not connected'}
-                </span>
+                <span className={`connected-dot ${ok ? 'active' : 'inactive'}`} />
+                <span style={{ fontWeight: 600 }}>{site.name}</span>
+                <span style={{ fontSize: '0.8rem', color }}>{label}</span>
               </div>
               <button
-                className={`btn btn-sm ${isConnected ? 'btn-secondary' : 'btn-primary'}`}
-                onClick={() => handleConnect(platform)}
-                disabled={connectingPlatform !== null}
+                className={`btn btn-sm ${ok ? 'btn-secondary' : 'btn-primary'}`}
+                onClick={() => handleConnect(site.id)}
+                disabled={connectingPlatform !== null || site.state === 'busy'}
               >
-                {connectingPlatform === platform
-                  ? <><Spinner size="sm" /> Launching…</>
-                  : isConnected
-                    ? '🔄 Reconnect'
-                    : `🔗 Connect ${platform.charAt(0).toUpperCase() + platform.slice(1)}`
-                }
+                {connectingPlatform === site.id ? <><Spinner size="sm" /> Opening…</> : ok ? '🔄 Reconnect' : '🔗 Connect'}
               </button>
             </div>
           )

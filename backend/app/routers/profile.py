@@ -6,10 +6,10 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Annotated, Any, Dict, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from sqlmodel import Session, select
 
 from app.auth import get_current_user
@@ -51,7 +51,7 @@ def _profile_to_dict(profile: Profile) -> Dict[str, Any]:
         "phone": profile.phone,
         "location": profile.location,
         "linkedin_url": profile.linkedin_url,
-        "resume_path": profile.resume_path,
+        "resume_path": Path(profile.resume_path).name if profile.resume_path else None,  # not the server path
         "resume_filename": filename,
         "resume_text": profile.resume_text,
         "parsed_skills": skills,
@@ -85,19 +85,29 @@ def get_profile(
 # ---------------------------------------------------------------------------
 
 class ProfileUpdate(BaseModel):
-    name: Optional[str] = None
-    full_name: Optional[str] = None
-    phone: Optional[str] = None
-    location: Optional[str] = None
-    linkedin_url: Optional[str] = None
-    parsed_skills: Optional[List[Any]] = None
-    skills: Optional[List[Any]] = None
-    parsed_experience: Optional[List[Any]] = None
-    experience: Optional[List[Any]] = None
-    parsed_education: Optional[List[Any]] = None
-    education: Optional[List[Any]] = None
-    total_years: Optional[float] = None
-    apply_skills: Optional[List[str]] = None  # subset of skills used for matching and applying
+    name: Optional[Annotated[str, Field(max_length=120)]] = None
+    full_name: Optional[Annotated[str, Field(max_length=120)]] = None
+    phone: Optional[Annotated[str, Field(max_length=40)]] = None
+    location: Optional[Annotated[str, Field(max_length=120)]] = None
+    linkedin_url: Optional[Annotated[str, Field(max_length=300)]] = None
+    parsed_skills: Optional[Annotated[List[Any], Field(max_length=300)]] = None
+    skills: Optional[Annotated[List[Any], Field(max_length=300)]] = None
+    parsed_experience: Optional[Annotated[List[Any], Field(max_length=50)]] = None
+    experience: Optional[Annotated[List[Any], Field(max_length=50)]] = None
+    parsed_education: Optional[Annotated[List[Any], Field(max_length=20)]] = None
+    education: Optional[Annotated[List[Any], Field(max_length=20)]] = None
+    total_years: Optional[Annotated[float, Field(ge=0, le=60)]] = None
+    # subset of skills used for matching and applying
+    apply_skills: Optional[Annotated[List[Annotated[str, Field(max_length=80)]], Field(max_length=300)]] = None
+
+    @field_validator("linkedin_url")
+    @classmethod
+    def _http_only(cls, v: Optional[str]) -> Optional[str]:
+        from app.security import http_url_or_none
+
+        if v and not http_url_or_none(v.strip()):
+            raise ValueError("must be an https:// link")
+        return v
 
 
 @router.put("", include_in_schema=False)
@@ -148,6 +158,7 @@ def update_profile(
 # ---------------------------------------------------------------------------
 
 ALLOWED_EXTENSIONS = {".pdf", ".docx"}
+_MAX_RESUME_BYTES = 5 * 1024 * 1024
 
 
 @router.post("/resume")
@@ -164,15 +175,26 @@ async def upload_resume(
             detail=f"Unsupported file type '{suffix}'. Only PDF and DOCX are accepted.",
         )
 
-    RESUMES_DIR.mkdir(parents=True, exist_ok=True)
-    safe_name = f"{current_user.id}_{Path(file.filename).name}"
-    dest_path = RESUMES_DIR / safe_name
+    import asyncio
+    import re
 
-    content = await file.read()
+    from app.security import rate_limit
+
+    rate_limit(f"upload:{current_user.id}", 10, 3600, "Too many uploads — try again in an hour")
+    content = await file.read(_MAX_RESUME_BYTES + 1)
+    if len(content) > _MAX_RESUME_BYTES:
+        raise HTTPException(status_code=413, detail="Résumé must be under 5 MB")
+    # The extension is user-controlled: check the bytes really are a PDF / DOCX (zip) file
+    if not content.startswith(b"%PDF-" if suffix == ".pdf" else b"PK\x03\x04"):
+        raise HTTPException(status_code=422, detail=f"That file isn't a valid {suffix[1:].upper()}")
+
+    RESUMES_DIR.mkdir(parents=True, exist_ok=True)
+    stem = re.sub(r"[^\w.-]+", "_", Path(file.filename).stem)[:60].strip("._") or "resume"
+    dest_path = RESUMES_DIR / f"{current_user.id}_{stem}{suffix}"
     dest_path.write_bytes(content)
 
-    # Extract text
-    text = resume_service.extract_text(str(dest_path))
+    # Extract text (CPU-bound parsing: off the event loop)
+    text = await asyncio.to_thread(resume_service.extract_text, str(dest_path))
 
     # Parse via LLM / rule-based extractor
     parsed = await resume_service.parse_resume(text, OLLAMA_URL, OLLAMA_MODEL)

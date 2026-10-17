@@ -41,14 +41,20 @@ logger = logging.getLogger(__name__)
 # Scraped addresses that are never a hiring inbox
 _NOT_RECRUITER = re.compile(
     r"^(no-?reply|do-?not-?reply|privacy|legal|abuse|security|support|help|unsubscribe|accessibility|"
-    r"accommodations?|dpo|gdpr|press|media|billing|webmaster|postmaster)\b", re.I)
+    r"accommodations?|dpo|gdpr|press|media|billing|webmaster|postmaster)\b"
+    r"|^(ethi(cs?|que)|compliance|whistle|speak-?up|integrity|fraud|investors?|hr-?benefits|benefits|payroll)", re.I)
+_NOT_RECRUITER_ANYWHERE = re.compile(r"accommodation|benefit|payroll|privacy|no-?reply|ethic|compliance", re.I)
+_PLACEHOLDER_DOMAINS = {"example.com", "email.com", "domain.com", "company.com", "yourcompany.com"}
 
 
 def usable_recruiter_email(address: Optional[str]) -> bool:
     """True when a scraped address looks like a place to send an application."""
-    if not address or not re.fullmatch(r"[\w.+\-]+@[\w\-]+(\.[\w\-]+)+", address):
+    # must start with a letter/digit: ".external@x.com" is a fragment of a longer scraped address
+    if not address or not re.fullmatch(r"\w[\w.+\-]*@[\w\-]+(\.[\w\-]+)+", address):
         return False
-    return not _NOT_RECRUITER.match(address.split("@")[0])
+    local, domain = address.rsplit("@", 1)
+    return (not _NOT_RECRUITER.match(local) and not _NOT_RECRUITER_ANYWHERE.search(local)
+            and domain.lower() not in _PLACEHOLDER_DOMAINS)
 
 
 def _context(job: Job, profile: Profile) -> str:
@@ -190,10 +196,15 @@ def send_email(
     Returns True on success, False on any error.
     """
     try:
+        from app.security import check_public_host
+
+        check_public_host(smtp_host, smtp_port)  # never let a user point the server at its own network
+        if not usable_recruiter_email(to) and to != smtp_from:
+            raise ValueError(f"refusing to send to {to!r}")
         msg = MIMEMultipart()
         msg["From"] = smtp_from
         msg["To"] = to
-        msg["Subject"] = subject
+        msg["Subject"] = " ".join(subject.split())  # no CR/LF: scraped titles must not inject headers
         msg.attach(MIMEText(body, "plain", "utf-8"))
 
         for file in [resume_path, *(extra_files or [])]:

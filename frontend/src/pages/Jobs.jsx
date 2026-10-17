@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react'
 import { getJobs, getJob, triggerSearch, getResumeReport, getCoverLetter, getRegions, applyToJobs, applyNow } from '../api'
 import SkillChips from '../components/SkillChips'
 import StatusBadge from '../components/StatusBadge'
+import { safeUrl } from '../safeUrl'
 import Spinner from '../components/Spinner'
 import Modal from '../components/Modal'
 
@@ -229,7 +230,7 @@ function JobDetailModal({ job, onClose, onApplied }) {
 
       {job.url && (
         <div style={{ marginTop: '0.75rem' }}>
-          <a href={job.url} target="_blank" rel="noreferrer" className="btn btn-primary btn-sm">
+          <a href={safeUrl(job.url)} target="_blank" rel="noreferrer" className="btn btn-primary btn-sm">
             🔗 Open Job Listing
           </a>
         </div>

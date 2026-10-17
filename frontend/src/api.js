@@ -139,15 +139,13 @@ export async function testEmail() {
   return apiFetch('/settings/test-email', { method: 'POST' })
 }
 
-export async function connectBrowser(platform) {
-  // platform: 'linkedin' | 'naukri'
-  return apiFetch(`/settings/connect-browser/${platform}`, {
-    method: 'POST',
-  })
+export async function connectJobSite(site) {
+  return apiFetch(`/settings/job-sites/${site}/connect`, { method: 'POST' })
 }
 
-export async function getBrowserStatus() {
-  return apiFetch('/settings/browser-status')
+// Reads every saved browser profile: slow-ish (a few seconds)
+export async function getJobSites() {
+  return apiFetch('/settings/job-sites')
 }
 
 // ---------------------------------------------------------------------------

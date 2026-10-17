@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { getApplications, updateApplicationStatus, sendApplicationEmail, cancelApplication } from '../api'
+import { safeUrl } from '../safeUrl'
 import Spinner from '../components/Spinner'
 import StatusBadge, { CHANNELS } from '../components/StatusBadge'
 import SkillChips from '../components/SkillChips'
@@ -20,7 +21,7 @@ function ScoreCell({ score }) {
 function Linkified({ text }) {
   return String(text || '').split(/(https?:\/\/[^\s)]+)/g).map((part, i) =>
     /^https?:\/\//.test(part)
-      ? <a key={i} href={part} target="_blank" rel="noreferrer">{part}</a>
+      ? <a key={i} href={safeUrl(part)} target="_blank" rel="noreferrer">{part}</a>
       : <React.Fragment key={i}>{part}</React.Fragment>)
 }
 
@@ -30,7 +31,7 @@ function SentTo({ app }) {
   if (!/^https?:\/\//.test(to)) return <a href={`mailto:${to}`} onClick={e => e.stopPropagation()}>{to}</a>
   let host = to
   try { host = new URL(to).hostname } catch { /* show the raw link */ }
-  return <a href={to} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()}>{host} ↗</a>
+  return <a href={safeUrl(to)} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()}>{host} ↗</a>
 }
 
 function CopyBlock({ title, text }) {
@@ -81,8 +82,8 @@ function ExpandedRow({ app, onSent }) {
             : <Linkified text={app.notes || 'No details recorded.'} />}
         </p>
         <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', fontSize: '0.85rem', marginBottom: '0.6rem' }}>
-          {job.url && <a href={job.url} target="_blank" rel="noreferrer">🔗 Job posting</a>}
-          {job.apply_url && <a href={job.apply_url} target="_blank" rel="noreferrer">🏢 Company application page</a>}
+          {safeUrl(job.url) && <a href={safeUrl(job.url)} target="_blank" rel="noreferrer">🔗 Job posting</a>}
+          {safeUrl(job.apply_url) && <a href={safeUrl(job.apply_url)} target="_blank" rel="noreferrer">🏢 Company application page</a>}
           {job.recruiter_email && <span>📧 Recruiter: <a href={`mailto:${job.recruiter_email}`}>{job.recruiter_email}</a></span>}
           {job.location && <span>📍 {job.location}</span>}
         </div>

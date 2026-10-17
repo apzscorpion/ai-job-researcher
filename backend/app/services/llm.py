@@ -170,7 +170,10 @@ async def _openai_chat(p: Dict[str, str], prompt: str, json_mode: bool) -> str:
     if json_mode:
         payload["response_format"] = {"type": "json_object"}
     try:
-        async with httpx.AsyncClient(timeout=180.0) as client:
+        from app.security import block_private_hook
+
+        # re-checked on every call: DNS can change after the URL was saved
+        async with httpx.AsyncClient(timeout=180.0, event_hooks={"request": [block_private_hook]}) as client:
             resp = await client.post(f"{p['base_url'].rstrip('/')}/chat/completions", json=payload,
                                      headers={"Authorization": f"Bearer {key}"})
         if resp.status_code == 429:

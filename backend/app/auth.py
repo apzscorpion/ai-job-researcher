@@ -23,9 +23,14 @@ from app.models import User
 # Configuration
 # ---------------------------------------------------------------------------
 
-SECRET_KEY: str = os.environ.get("SECRET_KEY", "CHANGE_ME_insecure_default_key_32chars!")
+SECRET_KEY: str = os.environ.get("SECRET_KEY", "")
+# Anyone who knows the signing key can log in as any user: refuse to start with a missing or known one
+if len(SECRET_KEY) < 32 or SECRET_KEY in ("CHANGE_ME_insecure_default_key_32chars!",
+                                          "change-me-32-chars-minimum-please!"):
+    raise RuntimeError("SECRET_KEY must be set in .env to a random value of 32+ characters "
+                       "(python -c \"import secrets; print(secrets.token_hex(32))\")")
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_DAYS = 30
+ACCESS_TOKEN_EXPIRE_HOURS = int(os.environ.get("TOKEN_HOURS", "24"))
 
 # ---------------------------------------------------------------------------
 # Password hashing
@@ -50,7 +55,7 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 def create_token(user_id: int) -> str:
     """Create a signed JWT access token for the given user ID."""
-    expire = datetime.now(tz=timezone.utc) + timedelta(days=ACCESS_TOKEN_EXPIRE_DAYS)
+    expire = datetime.now(tz=timezone.utc) + timedelta(hours=ACCESS_TOKEN_EXPIRE_HOURS)
     payload = {
         "sub": str(user_id),
         "exp": expire,
