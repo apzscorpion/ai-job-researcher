@@ -214,6 +214,27 @@ class SendBody(BaseModel):
     subject: Optional[str] = None
 
 
+@router.delete("/{app_id}")
+def cancel_application(
+    app_id: int,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+) -> Dict[str, Any]:
+    """Cancel an application that hasn't been sent; the job goes back to "Not applied yet"."""
+    app = session.get(Application, app_id)
+    if not app or app.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Application not found")
+    if app.status in ("applied", "replied"):
+        raise HTTPException(status_code=409, detail="Already sent — it can't be taken back from here")
+    if app.status == "applying":
+        raise HTTPException(status_code=409, detail="It's being sent right now — wait a minute and check again")
+    session.delete(app)
+    session.add(ActivityLog(user_id=current_user.id, event="application_cancelled",
+                            detail=f"Application {app_id} for job_id={app.job_id} was {app.status}"))
+    session.commit()
+    return {"cancelled": app_id}
+
+
 @router.post("/{app_id}/send")
 def send_draft(
     app_id: int,

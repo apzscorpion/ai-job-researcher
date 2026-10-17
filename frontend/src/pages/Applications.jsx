@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { getApplications, updateApplicationStatus, sendApplicationEmail } from '../api'
+import { getApplications, updateApplicationStatus, sendApplicationEmail, cancelApplication } from '../api'
 import Spinner from '../components/Spinner'
 import StatusBadge, { CHANNELS } from '../components/StatusBadge'
 import SkillChips from '../components/SkillChips'
@@ -182,6 +182,19 @@ export default function Applications() {
     }
   }
 
+  async function handleCancel(app) {
+    if (!window.confirm(`Cancel the application for “${app.job?.title || 'this job'}”? It goes back to “Not applied yet” on the Jobs page.`)) return
+    setUpdatingId(app.id)
+    try {
+      await cancelApplication(app.id)
+      setApps(prev => prev.filter(a => a.id !== app.id))
+    } catch (err) {
+      alert(`Couldn't cancel: ${err.message}`)
+    } finally {
+      setUpdatingId(null)
+    }
+  }
+
   // ---------------------------------------------------------------------------
   function toggleExpand(id) {
     setExpandedId(prev => (prev === id ? null : id))
@@ -343,6 +356,13 @@ export default function Applications() {
                                     <option key={s} value={s}>{s}</option>
                                   ))}
                                 </select>
+                                {!['applied', 'replied', 'applying'].includes(app.status) && (
+                                  <button className="btn btn-secondary btn-sm" style={{ marginTop: '0.3rem' }}
+                                    disabled={isUpdating} onClick={() => handleCancel(app)}
+                                    title="Not sent yet: remove it so it never goes out">
+                                    ✖ Cancel
+                                  </button>
+                                )}
                                 {isUpdating && <Spinner size="sm" />}
                               </td>
                             </tr>

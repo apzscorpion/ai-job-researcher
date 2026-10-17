@@ -172,6 +172,14 @@ export async function applyToJobs(jobIds) {
   return apiFetch('/jobs/apply', { method: 'POST', body: JSON.stringify({ job_ids: jobIds }) })
 }
 
+export async function applyNow(jobId, via) {
+  return apiFetch(`/jobs/${jobId}/apply-now`, { method: 'POST', body: JSON.stringify({ via }) })
+}
+
+export async function cancelApplication(appId) {
+  return apiFetch(`/applications/${appId}`, { method: 'DELETE' })
+}
+
 export async function triggerSearch() {
   return apiFetch('/jobs/search', { method: 'POST' })
 }

@@ -23,7 +23,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
@@ -180,6 +180,69 @@ def route_for(job) -> str:
 # ---------------------------------------------------------------------------
 # Scheduler job: apply queue drain
 # ---------------------------------------------------------------------------
+
+def apply_options(job) -> List[str]:
+    """Every way this job can be applied to, best first (the user picks one on the Jobs page)."""
+    from app.services.mailer import usable_recruiter_email
+
+    opts = ["email"] if usable_recruiter_email(job.recruiter_email) else []
+    if job.source in PLATFORM_DAILY_CAP:
+        opts.append(job.source)
+    if job.apply_url or job.source not in PLATFORM_DAILY_CAP:
+        opts.append("site")
+    return opts
+
+
+def platform_block(session, user_id: int, settings, route: str, now_utc: datetime) -> Optional[str]:
+    """Why LinkedIn/Naukri can't take an application right now; None when it can."""
+    from sqlmodel import col, func, select
+
+    from app.models import Application
+
+    paused = active_pauses(settings.platform_pauses, now_utc)
+    if route in paused:
+        return paused[route]
+    mine = (Application.user_id == user_id, Application.method == route,
+            col(Application.status).not_in(NOT_ATTEMPTED))
+    day_start = local_day_start_utc(user_tz(settings.timezone), now_utc)
+    today = session.exec(select(func.count()).select_from(Application)
+                         .where(*mine, col(Application.applied_at) >= day_start)).one()
+    if today >= PLATFORM_DAILY_CAP[route]:
+        return f"{route.title()} daily limit reached ({PLATFORM_DAILY_CAP[route]} today)."
+    last = session.exec(select(func.max(Application.applied_at)).where(*mine)).one()
+    wait = PLATFORM_GAP_S[0] - (now_utc.replace(tzinfo=None) - last).total_seconds() if last else 0
+    if wait > 0:
+        return f"The last {route.title()} application was {int((PLATFORM_GAP_S[0] - wait) // 60)} min ago; " \
+               f"{route.title()} needs a {PLATFORM_GAP_S[0] // 60}-minute gap to keep your account safe."
+    return None
+
+
+async def apply_now(app_id: int, route: str) -> None:
+    """Apply to one job right away (the user clicked Apply on its card)."""
+    from sqlmodel import Session, select
+
+    from app.db import engine
+    from app.models import Application, Job, Profile, Settings, User
+
+    now_utc = datetime.now(tz=timezone.utc)
+    with Session(engine) as session:
+        app = session.get(Application, app_id)
+        job = session.get(Job, app.job_id) if app else None
+        if not app or not job:
+            return
+        settings = session.exec(select(Settings).where(Settings.user_id == app.user_id)).first()
+        profile = session.exec(select(Profile).where(Profile.user_id == app.user_id)).first()
+        user = session.get(User, app.user_id)
+        try:
+            await _apply_one(session, app, job, app.user_id, settings, profile,
+                             settings.smtp_from or (user.email if user else ""), route, now_utc)
+        finally:
+            session.refresh(app)
+            if app.status == "applying":  # e.g. the site paused itself: keep it for the queue
+                app.status = "queued"
+                session.add(app)
+                session.commit()
+
 
 async def _apply_email(app, job, profile, settings, providers, to: str) -> Tuple[str, str]:
     """Write the email with AI and send it from the user's mailbox. Returns (status, note)."""
@@ -352,6 +415,16 @@ async def _process_apply_queue() -> None:
 def start_scheduler() -> None:
     """Initialise and start the APScheduler AsyncIOScheduler."""
     global _scheduler
+
+    # An "Apply now" cut off by a restart goes back to the queue instead of showing "Applying…" forever
+    from sqlmodel import Session, update
+
+    from app.db import engine
+    from app.models import Application
+
+    with Session(engine) as session:
+        session.exec(update(Application).where(Application.status == "applying").values(status="queued"))
+        session.commit()
 
     try:
         from apscheduler.schedulers.asyncio import AsyncIOScheduler  # type: ignore

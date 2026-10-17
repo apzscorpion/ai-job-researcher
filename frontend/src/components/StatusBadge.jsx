@@ -2,6 +2,7 @@ import React from 'react'
 
 const STATUS_MAP = {
   queued:       { cls: 'badge-info',         label: 'Queued' },
+  applying:     { cls: 'badge-info',         label: 'Applying…' },
   draft:        { cls: 'badge-warning',      label: 'Draft — review' },
   applied:      { cls: 'badge-applied',      label: 'Applied' },
   needs_manual: { cls: 'badge-needs_manual', label: 'Needs you' },

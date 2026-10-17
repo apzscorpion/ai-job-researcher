@@ -26,11 +26,12 @@ def _user_skills(user_id: int, session: Session) -> List[str]:
 
 def _job_to_dict(job: Job, skills: Optional[List[str]] = None, app: Optional[Application] = None) -> Dict[str, Any]:
     from app.services.matcher import skill_match
-    from app.services.scheduler import route_for
+    from app.services.scheduler import apply_options, route_for
 
     matched, missing = skill_match(skills or [], f"{job.title}\n{job.description or ''}")
     return {
         "apply_via": route_for(job),  # email | linkedin | naukri | site
+        "apply_options": apply_options(job),
         "application_status": app.status if app else None,
         "application_id": app.id if app else None,
         "matched_skills": matched,  # job asks for them and they are among the user's selected skills
@@ -129,6 +130,56 @@ def list_jobs(
         "page_size": effective_limit,
         "items": [_job_to_dict(j, skills, apps.get(j.id)) for j in jobs],
     }
+
+
+class ApplyNowBody(BaseModel):
+    via: Optional[str] = None  # email | linkedin | naukri | site; default: the best route
+
+
+@router.post("/{job_id}/apply-now")
+def apply_now(
+    job_id: int,
+    body: ApplyNowBody,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+) -> Dict[str, Any]:
+    """Apply right away instead of waiting in the queue. LinkedIn/Naukri still keep their safety gaps."""
+    from datetime import datetime, timezone
+
+    from app.models import Settings
+    from app.services import scheduler
+
+    job = session.get(Job, job_id)
+    if not job or job.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Job not found")
+    via = body.via or scheduler.route_for(job)
+    if via not in scheduler.apply_options(job):
+        raise HTTPException(status_code=400, detail=f"This job can't be applied to by {via}")
+    app = session.exec(select(Application).where(Application.user_id == current_user.id,
+                                                 Application.job_id == job_id)).first()
+    if app and app.status in ("applied", "replied", "applying"):
+        raise HTTPException(status_code=409, detail=f"Already {app.status} — see the Applications page")
+    settings = session.exec(select(Settings).where(Settings.user_id == current_user.id)).first()
+    if not settings:
+        raise HTTPException(status_code=400, detail="Open Settings once before applying")
+
+    app = app or Application(user_id=current_user.id, job_id=job_id, method=via)
+    app.applied_at = datetime.utcnow()
+    why = (scheduler.platform_block(session, current_user.id, settings, via, datetime.now(timezone.utc))
+           if via in scheduler.PLATFORM_DAILY_CAP else None)
+    if why:
+        app.status, app.notes = "queued", f"Waiting: {why}"
+        session.add(app)
+        session.commit()
+        return {"started": False, "message": f"{why} Added to the queue; it goes out as soon as that clears."}
+
+    app.status, app.method, app.notes = "applying", via, "Applying now…"
+    session.add(app)
+    session.commit()
+    background_tasks.add_task(scheduler.apply_now, app.id, via)
+    return {"started": True, "application_id": app.id,
+            "message": "Applying now — the result shows on this card and the Applications page in a minute."}
 
 
 @router.get("/regions")

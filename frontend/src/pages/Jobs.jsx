@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { getJobs, getJob, triggerSearch, getResumeReport, getCoverLetter, getRegions, applyToJobs } from '../api'
+import { getJobs, getJob, triggerSearch, getResumeReport, getCoverLetter, getRegions, applyToJobs, applyNow } from '../api'
 import SkillChips from '../components/SkillChips'
 import StatusBadge from '../components/StatusBadge'
 import Spinner from '../components/Spinner'
@@ -42,6 +42,47 @@ function applyVia(job) {
 
 // Jobs with no application yet (or a failed one) can be picked for applying
 const pickable = job => !job.application_status || job.application_status === 'failed'
+
+const VIA_BUTTON = {
+  email:    job => ({ label: '📧 Apply by email', title: `Sends your résumé + an AI cover letter from your Gmail to ${job.recruiter_email}` }),
+  linkedin: () => ({ label: '🔗 Apply on LinkedIn', title: 'LinkedIn Easy Apply (keeps the 8-minute gap and 15/day limit)' }),
+  naukri:   () => ({ label: '🟦 Apply on Naukri', title: 'Naukri apply (keeps the gap and 10/day limit)' }),
+  site:     () => ({ label: '🏢 Apply on company site', title: 'Fills the company application form; captchas or logins come to you' }),
+}
+
+// One button per way this job can be applied to; applies now instead of waiting in the queue
+function ApplyButtons({ job, onDone }) {
+  const [busy, setBusy] = useState('')
+  const [msg, setMsg]   = useState('')
+  const [err, setErr]   = useState('')
+  const status = job.application_status
+  if (['applied', 'replied', 'applying'].includes(status) || !job.apply_options?.length) return null
+
+  async function go(via) {
+    setBusy(via); setMsg(''); setErr('')
+    try {
+      const res = await applyNow(job.id, via)
+      setMsg(res.message)
+      setTimeout(onDone, res.started ? 4000 : 0)
+    } catch (e) { setErr(e.message) }
+    finally { setBusy('') }
+  }
+
+  return (
+    <div onClick={e => e.stopPropagation()} style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', alignItems: 'center' }}>
+      {job.apply_options.map(via => {
+        const { label, title } = VIA_BUTTON[via](job)
+        return (
+          <button key={via} className="btn btn-primary btn-sm" title={title} disabled={!!busy} onClick={() => go(via)}>
+            {busy === via ? <><Spinner size="sm" /> Starting…</> : label}
+          </button>
+        )
+      })}
+      {msg && <span style={{ fontSize: '0.78rem', color: '#166534' }}>✅ {msg}</span>}
+      {err && <span style={{ fontSize: '0.78rem', color: '#b91c1c' }}>⚠️ {err}</span>}
+    </div>
+  )
+}
 
 // ---------------------------------------------------------------------------
 // AI document for a job: résumé update report or cover letter (copyable)
@@ -104,7 +145,7 @@ function AiDoc({ jobId, fetcher, label, hint }) {
   )
 }
 
-function JobDetailModal({ job, onClose }) {
+function JobDetailModal({ job, onClose, onApplied }) {
   const score = Number(job.score) || 0
   const scoreCls = score >= 7 ? 'score-high' : score >= 5 ? 'score-mid' : 'score-low'
   return (
@@ -128,6 +169,9 @@ function JobDetailModal({ job, onClose }) {
         <strong>How we apply:</strong> {applyVia(job)}
         {job.application_status && <> · <StatusBadge status={job.application_status} /></>}
       </p>
+      <div style={{ marginBottom: '0.75rem' }}>
+        <ApplyButtons job={job} onDone={onApplied} />
+      </div>
 
       {job.recruiter_email && (
         <p style={{ marginBottom: '0.75rem', fontSize: '0.88rem', color: '#475569' }}>
@@ -476,6 +520,7 @@ export default function Jobs() {
                           {job.application_status && <><StatusBadge status={job.application_status} />{' '}</>}
                           {applyVia(job)}
                         </div>
+                        <ApplyButtons job={job} onDone={loadJobs} />
                       </div>
                     )
                   })}
@@ -515,7 +560,7 @@ export default function Jobs() {
 
       {/* ── Job Detail Modal ─────────────────────────────── */}
       {selectedJob && (
-        <JobDetailModal job={selectedJob} onClose={() => setSelectedJob(null)} />
+        <JobDetailModal job={selectedJob} onClose={() => setSelectedJob(null)} onApplied={() => { setSelectedJob(null); loadJobs() }} />
       )}
     </div>
   )

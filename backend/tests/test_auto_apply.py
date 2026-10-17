@@ -168,3 +168,13 @@ def test_email_attaches_resume_and_cover_letter(tmp_path, monkeypatch):
     monkeypatch.setattr(smtplib, "SMTP", FakeSMTP)
     assert mailer.send_email("hr@c.com", "s", "b", str(resume), "h", 587, "u", "p", "me@x.com", True, [cover])
     assert 'filename="cv.pdf"' in sent["raw"] and "Cover_Letter_Asha_Rao.docx" in sent["raw"]
+
+
+def test_apply_options():
+    from app.services.scheduler import apply_options
+
+    job = Job(user_id=1, title="t", company="c", url="u", source="linkedin")
+    assert apply_options(job) == ["linkedin"]
+    job.recruiter_email, job.apply_url = "hr@c.com", "https://jobs.lever.co/c/1"
+    assert apply_options(job) == ["email", "linkedin", "site"]
+    assert apply_options(Job(user_id=1, title="t", company="c", url="u", source="remotive")) == ["site"]
