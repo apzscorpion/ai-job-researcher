@@ -1,3 +1,4 @@
+import WaitingBanner from '../components/WaitingBanner'
 import React, { useState, useEffect, useCallback } from 'react'
 import { getJobs, getJob, triggerSearch, getResumeReport, getCoverLetter, getRegions, applyToJobs, applyNow } from '../api'
 import SkillChips from '../components/SkillChips'
@@ -362,6 +363,8 @@ export default function Jobs() {
           {searchLoading ? <><Spinner size="sm" /> Searching…</> : '🔍 Search Now'}
         </button>
       </div>
+
+      <WaitingBanner />
 
       {searchMsg   && <div className="alert alert-success">✅ {searchMsg}</div>}
       {searchError && <div className="alert alert-error">⚠️ {searchError}</div>}

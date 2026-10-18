@@ -1,3 +1,4 @@
+import WaitingBanner from '../components/WaitingBanner'
 import React, { useState, useEffect, useCallback } from 'react'
 import { getApplications, updateApplicationStatus, sendApplicationEmail, cancelApplication } from '../api'
 import { safeUrl } from '../safeUrl'
@@ -219,6 +220,8 @@ export default function Applications() {
           {total} total
         </span>
       </div>
+
+      <WaitingBanner />
 
       {/* ── Filters ──────────────────────────────────────── */}
       <div className="filters-bar">

@@ -307,7 +307,9 @@ def stats_today(
     attempted = col(Application.status).not_in(NOT_ATTEMPTED)
 
     from app.services.llm import providers_for
-    from app.services.scheduler import PLATFORM_DAILY_CAP, active_pauses
+    from collections import Counter
+
+    from app.services.scheduler import PLATFORM_DAILY_CAP, active_pauses, route_for
 
     now = datetime.now(timezone.utc)
     today = col(Application.applied_at) >= local_day_start_utc(tz, now)
@@ -340,6 +342,10 @@ def stats_today(
             "auto_send_email": bool(settings and settings.auto_send_email),
             "ai_providers": len(providers_for(settings)) if settings else 0,
             "paused": active_pauses(settings.platform_pauses if settings else None, now),
+            # queued jobs per channel, so the UI can say "30 jobs are waiting for LinkedIn"
+            "queued_by_route": dict(Counter(route_for(j) for j in session.exec(
+                select(Job).join(Application, Application.job_id == Job.id)
+                .where(Application.user_id == current_user.id, Application.status == "queued")).all())),
             "platform_daily_cap": PLATFORM_DAILY_CAP,
             "apply_hours": [settings.apply_start_hour, settings.apply_end_hour] if settings else [9, 21],
             "timezone": tz.key,

@@ -111,16 +111,20 @@ async def apply_company_site(
             try:
                 await page.goto(job.url, wait_until="domcontentloaded", timeout=40_000)
                 await random_sleep(2.0, 4.0)
-                url = best_link(await page.eval_on_selector_all(
-                    "a[href]", "els => els.map(a => [(a.innerText || '').trim().toLowerCase(), a.href])"))
+                board = urlparse(job.url).netloc.lower()
+                links = await page.eval_on_selector_all(
+                    "a[href]", "els => els.map(a => [(a.innerText || '').trim().toLowerCase(), a.href])")
+                # the board's own "Apply" links (e.g. RemoteOK's /l/ redirect) need a login there, not a form
+                url = best_link([(t, h) for t, h in links if urlparse(h).netloc.lower() != board])
             except Exception:
                 logger.info("apply_company_site: couldn't open %s", job.url)
         if url.startswith("mailto:"):
             return "email", "The posting asks for applications by email.", url[7:].split("?")[0]
         if not url:
-            return "needs_manual", (f"Couldn't find {job.company}'s application link — if the job board needs you "
-                                    f"signed in, connect it in Settings → Job sites. Apply from the posting: "
-                                    f"{job.url}"), job.url
+            board = urlparse(job.url).netloc.replace("www.", "")
+            return "needs_manual", (f"{board} didn't show {job.company}'s own application link — it usually "
+                                    f"needs you signed in there: connect it in Settings → Job sites and click "
+                                    f"Apply again, or apply from the posting: {job.url}"), job.url
         host = urlparse(url).netloc.lower()
         if any(s in host for s in ACCOUNT_SITES):
             return "needs_manual", (f"{job.company} uses {host}, which needs an account there. "
