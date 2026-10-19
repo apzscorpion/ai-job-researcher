@@ -214,6 +214,25 @@ class SendBody(BaseModel):
     subject: Optional[str] = None
 
 
+@router.post("/retry-all")
+def retry_all(
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+) -> Dict[str, Any]:
+    """Start over on everything not yet sent: back to the queue with a fresh cover letter and email."""
+    apps = session.exec(select(Application).where(
+        Application.user_id == current_user.id,
+        col(Application.status).in_(["queued", "needs_manual", "failed", "draft"]))).all()
+    for app in apps:
+        app.status, app.method, app.notes, app.sent_to = "queued", "pending", "Retrying — queued again by you.", None
+        app.cover_letter = app.email_body = None  # rewritten in the current (formal) style
+        app.applied_at = datetime.utcnow()
+        session.add(app)
+    session.add(ActivityLog(user_id=current_user.id, event="applications_retried", detail=f"{len(apps)} re-queued"))
+    session.commit()
+    return {"requeued": len(apps)}
+
+
 @router.delete("/{app_id}")
 def cancel_application(
     app_id: int,

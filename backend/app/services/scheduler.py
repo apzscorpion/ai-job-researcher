@@ -21,6 +21,7 @@ Pacing logic is the pure function can_apply() so it can be unit-tested.
 from __future__ import annotations
 
 import json
+import re
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
@@ -128,6 +129,33 @@ def _notify(session, user_id: int, event: str, job, message: str) -> None:
         detail=json.dumps({"job_id": job.id, "title": job.title, "company": job.company,
                            "message": message}, ensure_ascii=False),
     ))
+
+
+# Notes that mean a person has to step in (captcha, security check, login) — the user gets an email too
+_NEEDS_HUMAN = re.compile(r"captcha|security check|verif|logged out|signed out|sign(ed)? in|log ?in", re.I)
+_ALERT_GAP_S = 30 * 60
+_last_alert: Dict[int, float] = {}
+
+
+async def _alert_user(settings, user_id: int, subject: str, body: str) -> None:
+    """Email the user about something only they can do; at most one email per 30 minutes."""
+    import asyncio
+    import time
+
+    from app import crypto
+    from app.services import mailer
+
+    if not (settings.smtp_host and settings.smtp_from and settings.smtp_password_enc):
+        return
+    now = time.monotonic()
+    if now - _last_alert.get(user_id, -_ALERT_GAP_S) < _ALERT_GAP_S:
+        return
+    _last_alert[user_id] = now
+    await asyncio.to_thread(
+        mailer.send_email, settings.smtp_from, f"[AI Job Researcher] {subject}",
+        body + "\n\nOpen the app → Applications (or Settings → Job sites) to take care of it.",
+        None, settings.smtp_host, settings.smtp_port, settings.smtp_user or "",
+        crypto.decrypt(settings.smtp_password_enc), settings.smtp_from, settings.smtp_tls)
 
 
 # ---------------------------------------------------------------------------
@@ -252,7 +280,8 @@ async def _apply_email(app, job, profile, settings, providers, to: str) -> Tuple
     from app.config import OLLAMA_MODEL, OLLAMA_URL
     from app.services import mailer
 
-    subject, body = await mailer.draft_email(job, profile, providers, OLLAMA_URL, OLLAMA_MODEL)
+    subject, body = await mailer.draft_email(job, profile, providers, OLLAMA_URL, OLLAMA_MODEL,
+                                             email=settings.smtp_from or "")
     if not body:
         return "failed", f"Couldn't write the email to {to} (no AI replied). Apply from the posting: {job.url}"
     app.email_body = body
@@ -261,7 +290,8 @@ async def _apply_email(app, job, profile, settings, providers, to: str) -> Tuple
         why = "Set up SMTP in Settings to send these automatically" if not smtp_ready else "Auto-send is off in Settings"
         return "draft", f"Email to {to} is written — review and send it below. ({why}.)\nSubject: {subject}"
     if not app.cover_letter:
-        app.cover_letter, _ = await mailer.write_cover_letter(job, profile, providers, OLLAMA_URL, OLLAMA_MODEL)
+        app.cover_letter, _ = await mailer.write_cover_letter(job, profile, providers, OLLAMA_URL, OLLAMA_MODEL,
+                                                              email=settings.smtp_from or "")
     extra = [mailer.cover_letter_docx(app.cover_letter, job, profile)] if app.cover_letter else []
     sent = await asyncio.to_thread(
         mailer.send_email, to, subject, body, profile.resume_path, settings.smtp_host, settings.smtp_port,
@@ -280,7 +310,8 @@ async def _apply_site(app, job, profile, settings, providers, email: str) -> Tup
     from app.services import mailer, site_apply
 
     if not app.cover_letter:
-        app.cover_letter, _ = await mailer.write_cover_letter(job, profile, providers, OLLAMA_URL, OLLAMA_MODEL)
+        app.cover_letter, _ = await mailer.write_cover_letter(job, profile, providers, OLLAMA_URL, OLLAMA_MODEL,
+                                                              email=email)
     status, note, url = await site_apply.apply_company_site(job, profile, settings, app.cover_letter or "", email)
     if status == "email":
         app.method = "email"
@@ -311,6 +342,7 @@ async def _apply_one(session, app, job, user_id: int, settings, profile, user_em
                 session.add(settings)
                 _notify(session, user_id, "account_attention", job, note)
                 session.commit()
+                await _alert_user(settings, user_id, f"{route.title()} needs you", note)
                 logger.warning("scheduler: %s paused for user_id=%s: %s", route, user_id, note)
                 return  # job stays queued for when the account is back
             if status == "external":  # stays method=linkedin/naukri so the visit counts toward that site's cap
@@ -326,6 +358,8 @@ async def _apply_one(session, app, job, user_id: int, settings, profile, user_em
 
     if status == "needs_manual":
         _notify(session, user_id, "apply_needs_you", job, note)
+        if _NEEDS_HUMAN.search(note):
+            await _alert_user(settings, user_id, f"Verification needed: {job.title} at {job.company}", note)
     elif status == "draft":
         _notify(session, user_id, "email_draft_ready", job, note.split("\n")[0])
 
@@ -444,7 +478,7 @@ def start_scheduler() -> None:
 
         _scheduler.add_job(
             _process_apply_queue,
-            trigger=IntervalTrigger(minutes=5),
+            trigger=IntervalTrigger(minutes=2),  # email/site every ~2 min; LinkedIn/Naukri keep their own gaps
             id="apply_job",
             name="Apply queue processor",
             replace_existing=True,

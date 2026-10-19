@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 # cookie: set only while signed in (None when we can't tell, then the user's own check counts)
 SITES: Dict[str, Dict[str, Optional[str]]] = {
     "linkedin":  {"name": "LinkedIn",  "url": "https://www.linkedin.com/login",       "domain": "linkedin.com",  "cookie": "li_at",   "profile": "linkedin"},
-    "naukri":    {"name": "Naukri",    "url": "https://www.naukri.com/nlogin/login",  "domain": "naukri.com",    "cookie": "nauk_at", "profile": "naukri"},
+    "naukri":    {"name": "Naukri",    "url": "https://www.naukri.com/nlogin/login",  "domain": "naukri.com",    "cookie": "nauk_rt", "profile": "naukri"},
     "indeed":    {"name": "Indeed",    "url": "https://secure.indeed.com/account/login", "domain": "indeed.com", "cookie": None,      "profile": "sites"},
     "glassdoor": {"name": "Glassdoor", "url": "https://www.glassdoor.co.in/index.htm", "domain": "glassdoor",    "cookie": None,      "profile": "sites"},
     "wellfound": {"name": "Wellfound (AngelList)", "url": "https://wellfound.com/login", "domain": "wellfound.com", "cookie": None, "profile": "sites"},
@@ -36,8 +36,6 @@ SITES: Dict[str, Dict[str, Optional[str]]] = {
     "hirist":    {"name": "Hirist",    "url": "https://www.hirist.tech/",             "domain": "hirist",        "cookie": None,      "profile": "sites"},
 }
 _LOGIN_WAIT_S = 15 * 60
-_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
-       "Chrome/124.0.0.0 Safari/537.36")
 
 # A browser profile can only be open once: (user_id, profile) -> lock
 _locks: Dict[tuple, asyncio.Lock] = {}
@@ -51,12 +49,25 @@ def busy(user_id: int, site: str) -> bool:
     return _lock(user_id, SITES[site]["profile"]).locked()
 
 
-async def _open(p, user_id: int, profile: str, headless: bool):
+async def _open(p, user_id: int, profile: str, headless: bool = False, background: bool = False):
+    """The user's saved profile in real Google Chrome (bundled Chromium if Chrome isn't installed).
+
+    Applying runs in a normal, *visible* window moved off-screen (background=True): LinkedIn and Naukri
+    detect headless browsers and end the session ("asks to log in again"). The browser's own user agent is
+    kept so the session matches the one the user signed in with. headless=True only reads cookies.
+    """
     path = BROWSERS_DIR / str(user_id) / profile
     path.mkdir(parents=True, exist_ok=True)
-    return await p.chromium.launch_persistent_context(
-        user_data_dir=str(path), headless=headless, user_agent=_UA,
-        args=["--disable-blink-features=AutomationControlled"], ignore_default_args=["--enable-automation"])
+    args = ["--disable-blink-features=AutomationControlled"]
+    if background:
+        args += ["--window-position=-32000,-32000", "--window-size=1366,900"]
+    kw = dict(user_data_dir=str(path), headless=headless, args=args, no_viewport=True,
+              ignore_default_args=["--enable-automation"])
+    try:
+        return await p.chromium.launch_persistent_context(channel="chrome", **kw)
+    except Exception:
+        logger.info("connections: Google Chrome not available, using bundled Chromium")
+        return await p.chromium.launch_persistent_context(**kw)
 
 
 def _state(cookies, site: Dict[str, Optional[str]]) -> str:
@@ -159,7 +170,7 @@ async def site_browser(user_id: int):
 
     async with _lock(user_id, "sites"):
         async with async_playwright() as p:
-            context = await _open(p, user_id, "sites", headless=True)
+            context = await _open(p, user_id, "sites", background=True)
             await context.route("**/*", _block_private)
             try:
                 yield context

@@ -323,7 +323,11 @@ async def cover_letter(
     from app.services import mailer
 
     job, profile, providers, jd_source = await _ai_context(job_id, current_user.id, session)
-    text, used = await mailer.write_cover_letter(job, profile, providers, OLLAMA_URL, OLLAMA_MODEL)
+    from app.models import Settings
+
+    st = session.exec(select(Settings).where(Settings.user_id == current_user.id)).first()
+    text, used = await mailer.write_cover_letter(job, profile, providers, OLLAMA_URL, OLLAMA_MODEL,
+                                                 email=(st.smtp_from if st else "") or current_user.email)
     if not text:
         raise HTTPException(status_code=502, detail=_NO_AI)
     return {"report": text, "jd_source": jd_source, "model": used}

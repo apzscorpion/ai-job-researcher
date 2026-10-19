@@ -1,6 +1,7 @@
 import WaitingBanner from '../components/WaitingBanner'
+import Pagination from '../components/Pagination'
 import React, { useState, useEffect, useCallback } from 'react'
-import { getApplications, updateApplicationStatus, sendApplicationEmail, cancelApplication } from '../api'
+import { getApplications, updateApplicationStatus, sendApplicationEmail, cancelApplication, retryAllApplications } from '../api'
 import { safeUrl } from '../safeUrl'
 import Spinner from '../components/Spinner'
 import StatusBadge, { CHANNELS } from '../components/StatusBadge'
@@ -184,6 +185,16 @@ export default function Applications() {
     }
   }
 
+  async function handleRetryAll() {
+    if (!window.confirm('Re-apply to everything not sent yet (queued, needs you, failed, drafts)? ' +
+                        'Each gets a fresh formal cover letter and goes out automatically, one at a time.')) return
+    try {
+      const res = await retryAllApplications()
+      alert(`${res.requeued} application(s) are back in the queue.`)
+      loadApps()
+    } catch (err) { alert(`Couldn't retry: ${err.message}`) }
+  }
+
   async function handleCancel(app) {
     if (!window.confirm(`Cancel the application for “${app.job?.title || 'this job'}”? It goes back to “Not applied yet” on the Jobs page.`)) return
     setUpdatingId(app.id)
@@ -216,9 +227,13 @@ export default function Applications() {
     <div>
       <div className="page-header">
         <h1 className="page-title">Applications</h1>
-        <span style={{ fontSize: '0.88rem', color: '#64748b' }}>
-          {total} total
-        </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          <span style={{ fontSize: '0.88rem', color: '#64748b' }}>{total} total</span>
+          <button className="btn btn-primary btn-sm" onClick={handleRetryAll}
+            title="Everything not sent yet goes back to the queue with a fresh formal cover letter">
+            🔁 Retry everything not sent
+          </button>
+        </div>
       </div>
 
       <WaitingBanner />
@@ -379,23 +394,7 @@ export default function Applications() {
                 </div>
 
                 {/* Pagination */}
-                <div className="pagination">
-                  <button
-                    className="btn btn-secondary btn-sm"
-                    onClick={() => setPage(p => Math.max(1, p - 1))}
-                    disabled={page === 1}
-                  >
-                    ← Prev
-                  </button>
-                  <span className="pagination-info">Page {page} of {totalPages}</span>
-                  <button
-                    className="btn btn-secondary btn-sm"
-                    onClick={() => setPage(p => Math.min(totalPages, p + 1))}
-                    disabled={page >= totalPages}
-                  >
-                    Next →
-                  </button>
-                </div>
+                <Pagination page={page} totalPages={totalPages} onChange={setPage} />
               </>
             )
       }

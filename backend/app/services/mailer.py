@@ -82,8 +82,13 @@ Skills to emphasise (the candidate has them and the job asks for them): {", ".jo
 Never invent experience, employers, numbers or skills that are not in the résumé."""
 
 
-def _signature(profile: Profile) -> str:
-    return "\n".join(x for x in [profile.name, profile.phone, profile.linkedin_url] if x) or "the candidate"
+def _signature(profile: Profile, email: str = "") -> str:
+    return "\n".join(x for x in [profile.name, email, profile.phone, profile.linkedin_url] if x) or "the candidate"
+
+
+_FORMAL = """Tone: formal business English, as in a letter to a senior hiring manager. No contractions, no
+exclamation marks, no casual or chatty phrases ("I'm excited", "super", "hey", "love to"), no emojis,
+no buzzword filler, no markdown. Confident and precise; every claim must come from the résumé."""
 
 
 async def write_cover_letter(
@@ -92,23 +97,28 @@ async def write_cover_letter(
     providers: List[Dict[str, str]],
     ollama_url: str,
     model: str,
+    email: str = "",
 ) -> Tuple[str, str]:
-    """(cover letter for *job*, name of the AI that wrote it); text is "" on failure."""
+    """(formal cover letter for *job*, name of the AI that wrote it); text is "" on failure."""
     from app.services.llm import generate
 
-    prompt = f"""Write a cover letter from the candidate for the "{job.title}" role at {job.company}.
+    prompt = f"""Write a formal cover letter from the candidate for the "{job.title}" position at {job.company}.
 
 {_context(job, profile)}
 
-Requirements:
-- 250-350 words, plain text (no markdown), confident and specific, no buzzword filler.
-- Paragraph 1: the role, and one specific thing about the company or role taken from the job text.
-- Paragraphs 2-3: 2-4 concrete achievements FROM THE RÉSUMÉ mapped to the job's main requirements.
-- Last paragraph: availability and a request for a conversation.
-- Start with "Dear Hiring Team," and end with:
-{_signature(profile)}
+{_FORMAL}
 
-Return only the letter."""
+Structure (300-380 words, four paragraphs, blank line between paragraphs):
+- Salutation: "Dear Hiring Manager," — or "Dear <name>," if the job text names the hiring contact.
+- Paragraph 1: state the position applied for and why this company and role specifically, citing one
+  concrete detail from the job text.
+- Paragraphs 2-3: the candidate's most relevant experience — 2-4 concrete achievements, technologies and
+  responsibilities FROM THE RÉSUMÉ, each tied to a stated requirement of the role.
+- Paragraph 4: availability, a statement of interest in an interview, and thanks for their consideration.
+- Close with "Yours sincerely," on its own line, then this signature exactly:
+{_signature(profile, email)}
+
+Return only the letter, starting with the salutation (no date or address block; they are added separately)."""
     text, used = await generate(prompt, providers, model, ollama_url, timeout=900.0)
     return re.sub(r"^```\w*\s*|\s*```$", "", (text or "").strip()), used
 
@@ -119,6 +129,7 @@ async def draft_email(
     providers: List[Dict[str, str]],
     ollama_url: str,
     model: str,
+    email: str = "",
 ) -> Tuple[str, str]:
     """Draft a tailored application email from the full résumé and job description.
 
@@ -128,20 +139,23 @@ async def draft_email(
 
     from app.services.llm import generate
 
-    prompt = f"""Write a job application email from the candidate to the hiring team at {job.company}
-for the "{job.title}" role.
+    prompt = f"""Write a formal job application email from the candidate to {job.company} for the
+"{job.title}" position. The candidate's résumé and a full cover letter are attached to the email.
 
 {_context(job, profile)}
 
-Requirements:
-- 150-220 words, plain text, warm and professional, no buzzword filler.
-- Opening line names the role and one specific thing about the company or role taken from the job text.
-- Middle: 2-3 concrete achievements or skills FROM THE RÉSUMÉ that match the job's requirements.
-- Close with a polite request for a short call and note that the résumé is attached.
-- End the body with this signature exactly:
-{_signature(profile)}
+{_FORMAL}
 
-Return ONLY JSON: {{"subject": "<max 10 words>", "body": "<email body>"}}
+Structure (150-200 words, short paragraphs, blank line between paragraphs):
+- Salutation: "Dear Hiring Manager," — or "Dear <name>," if the job text names the hiring contact.
+- State the position applied for and where it was advertised (if known), citing one detail from the job text.
+- Summarise in 2-3 sentences the candidate's most relevant experience FROM THE RÉSUMÉ for this role.
+- Note that the résumé and cover letter are attached, and request the opportunity of an interview.
+- Close with "Yours sincerely," on its own line, then this signature exactly:
+{_signature(profile, email)}
+
+Subject: "Application for {job.title} – {profile.name or 'Candidate'}" (shorten the title if very long).
+Return ONLY JSON: {{"subject": "<subject>", "body": "<email body>"}}
 """
 
     raw, _ = await generate(prompt, providers, model, ollama_url, json_mode=True)
@@ -170,7 +184,22 @@ def cover_letter_docx(text: str, job: Job, profile: Profile) -> str:
     name = re.sub(r"[^A-Za-z0-9]+", "_", (profile.name or "Candidate").strip()).strip("_")
     path = DATA_DIR / "tmp" / f"job{job.id}" / f"Cover_Letter_{name}.docx"
     path.parent.mkdir(parents=True, exist_ok=True)
+    from datetime import date
+
+    from docx.shared import Pt
+
     doc = Document()
+    doc.styles["Normal"].font.name = "Calibri"
+    doc.styles["Normal"].font.size = Pt(11)
+    # Formal letter layout: sender, date, addressee and subject line above the AI-written body
+    header = doc.add_paragraph()
+    header.add_run(profile.name or "").bold = True
+    contact = " | ".join(x for x in [profile.location, profile.phone, profile.linkedin_url] if x)
+    if contact:
+        header.add_run("\n" + contact)
+    doc.add_paragraph(date.today().strftime("%d %B %Y"))
+    doc.add_paragraph(f"Hiring Manager\n{job.company}")
+    doc.add_paragraph().add_run(f"Re: Application for the position of {job.title}").bold = True
     for para in text.strip().split("\n\n"):
         doc.add_paragraph(para.strip())
     doc.save(str(path))

@@ -174,6 +174,10 @@ export async function applyNow(jobId, via) {
   return apiFetch(`/jobs/${jobId}/apply-now`, { method: 'POST', body: JSON.stringify({ via }) })
 }
 
+export async function retryAllApplications() {
+  return apiFetch('/applications/retry-all', { method: 'POST' })
+}
+
 export async function cancelApplication(appId) {
   return apiFetch(`/applications/${appId}`, { method: 'DELETE' })
 }

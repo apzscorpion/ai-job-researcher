@@ -1,4 +1,5 @@
 import WaitingBanner from '../components/WaitingBanner'
+import Pagination from '../components/Pagination'
 import React, { useState, useEffect, useCallback } from 'react'
 import { getJobs, getJob, triggerSearch, getResumeReport, getCoverLetter, getRegions, applyToJobs, applyNow } from '../api'
 import SkillChips from '../components/SkillChips'
@@ -531,23 +532,7 @@ export default function Jobs() {
                 </div>
 
                 {/* Pagination */}
-                <div className="pagination">
-                  <button
-                    className="btn btn-secondary btn-sm"
-                    onClick={() => setPage(p => Math.max(1, p - 1))}
-                    disabled={page === 1}
-                  >
-                    ← Prev
-                  </button>
-                  <span className="pagination-info">Page {page} of {totalPages}</span>
-                  <button
-                    className="btn btn-secondary btn-sm"
-                    onClick={() => setPage(p => Math.min(totalPages, p + 1))}
-                    disabled={page >= totalPages}
-                  >
-                    Next →
-                  </button>
-                </div>
+                <Pagination page={page} totalPages={totalPages} onChange={setPage} />
               </>
             )
       }
