@@ -51,6 +51,7 @@ export async function apiFetch(path, options = {}) {
 
   // Return null for 204 No Content
   if (response.status === 204) return null
+  if (options.raw) return response.blob()  // images and files
 
   return response.json()
 }
@@ -150,8 +151,16 @@ export async function testKey(body) {
   return apiFetch('/settings/keys/test', { method: 'POST', body: JSON.stringify(body) })
 }
 
-export async function connectJobSite(site) {
-  return apiFetch(`/settings/job-sites/${site}/connect`, { method: 'POST' })
+export async function connectJobSite(site, remote = false) {
+  return apiFetch(`/settings/job-sites/${site}/connect${remote ? '?remote=true' : ''}`, { method: 'POST' })
+}
+
+// Sign-in window that runs on the host and is shown inside the website
+export const remoteSignIn = {
+  status: () => apiFetch('/settings/job-sites/remote/status'),
+  frame:  () => apiFetch('/settings/job-sites/remote/frame', { raw: true }),
+  input:  body => apiFetch('/settings/job-sites/remote/input', { method: 'POST', body: JSON.stringify(body) }),
+  close:  () => apiFetch('/settings/job-sites/remote/close', { method: 'POST' }),
 }
 
 // Reads every saved browser profile: slow-ish (a few seconds)

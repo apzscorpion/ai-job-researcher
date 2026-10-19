@@ -5,6 +5,7 @@ import {
 } from '../api'
 import Spinner from '../components/Spinner'
 import KeyField from '../components/KeyField'
+import RemoteBrowser from '../components/RemoteBrowser'
 
 // ---------------------------------------------------------------------------
 // Helper toggle
@@ -98,6 +99,7 @@ export default function Settings() {
   const [sites, setSites]                 = useState([])
   const [syncing, setSyncing]             = useState(false)
   const [connectingPlatform, setConnectingPlatform] = useState(null)
+  const [remoteSite, setRemoteSite]       = useState(null)
   const [connectMsg, setConnectMsg]   = useState('')
   const [connectErr, setConnectErr]   = useState('')
 
@@ -333,12 +335,21 @@ export default function Settings() {
     setConnectMsg(''); setConnectErr('')
     setConnectingPlatform(platform)
     try {
-      await connectJobSite(platform)
-      setConnectMsg('A browser window is opening on this computer. Log in there, then close the window ' +
-                    '(LinkedIn and Naukri close by themselves once you are in). Then click “Sync all”.')
+      const res = await connectJobSite(platform)
+      if (res.remote) setRemoteSite(sites.find(s => s.id === platform) || { id: platform, name: platform })
+      else setConnectMsg('A browser window is opening on this computer. Log in there, then close the window ' +
+                         '(LinkedIn and Naukri close by themselves once you are in). Then click “Sync all”.')
     } catch (err) { setConnectErr(err.message) }
     finally { setConnectingPlatform(null) }
   }
+
+  const closeRemote = useCallback(signedIn => {
+    setRemoteSite(site => {
+      if (signedIn && site) setConnectMsg(`Signed in to ${site.name} — applying there now uses your account.`)
+      return null
+    })
+    loadBrowserStatus()
+  }, [loadBrowserStatus])
 
   // ---------------------------------------------------------------------------
   if (loading) return <Spinner text="Loading settings…" />
@@ -685,6 +696,7 @@ export default function Settings() {
           )
         })}
       </Section>
+      {remoteSite && <RemoteBrowser name={remoteSite.name} onClose={closeRemote} />}
     </div>
   )
 }

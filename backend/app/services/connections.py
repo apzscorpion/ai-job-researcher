@@ -16,7 +16,7 @@ import asyncio
 import logging
 import time
 from contextlib import asynccontextmanager
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from app.config import BROWSERS_DIR
 
@@ -135,6 +135,101 @@ async def check_all(user_id: int) -> Dict[str, str]:
                     await context.close()
             result.update({k: _state(cookies, v) for k, v in sites.items()})
     return result
+
+
+# --- Remote sign-in: the browser runs here, the user sees and drives it from the website ----------------
+_REMOTE_IDLE_S = 10 * 60
+_remote: Dict[int, Dict[str, Any]] = {}   # user_id -> {site, page, done, state, active}
+_KEYS = {"Enter", "Tab", "Backspace", "Delete", "Escape", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"}
+
+
+def remote_status(user_id: int) -> Dict[str, Any]:
+    s = _remote.get(user_id)
+    if not s:
+        return {"state": "none"}
+    page = s.get("page")
+    return {"state": s["state"], "site": s["site"], "name": SITES[s["site"]]["name"],
+            "url": page.url if page and s["state"] == "open" else ""}
+
+
+def start_remote(user_id: int, site: str) -> None:
+    """Open *site*'s login in a browser on this machine for *user_id* (their own profile) and stream it."""
+    if _remote.get(user_id, {}).get("state") == "open":
+        return
+    done = asyncio.Event()
+    _remote[user_id] = {"site": site, "page": None, "done": done, "state": "starting", "active": time.monotonic()}
+    task = asyncio.create_task(_remote_run(user_id, site, done))
+    _remote[user_id]["task"] = task
+
+
+async def _remote_run(user_id: int, site: str, done: asyncio.Event) -> None:
+    from playwright.async_api import async_playwright  # type: ignore
+
+    info = SITES[site]
+    session = _remote[user_id]
+    try:
+        async with _lock(user_id, info["profile"]):
+            async with async_playwright() as p:
+                context = await _open(p, user_id, info["profile"], background=True)
+                try:
+                    page = context.pages[0] if context.pages else await context.new_page()
+                    await page.goto(info["url"], wait_until="domcontentloaded")
+                    session.update(page=page, state="open")
+                    while not done.is_set() and time.monotonic() - session["active"] < _REMOTE_IDLE_S:
+                        session["page"] = context.pages[-1] if context.pages else page  # follow pop-ups
+                        if info["cookie"] and _state(await context.cookies(), info) == "signed_in":
+                            await asyncio.sleep(3)
+                            session["state"] = "signed_in"
+                            break
+                        try:
+                            await asyncio.wait_for(done.wait(), timeout=2)
+                        except asyncio.TimeoutError:
+                            pass
+                finally:
+                    await context.close()
+    except Exception:
+        logger.exception("connections.remote: user_id=%s site=%s", user_id, site)
+        session["state"] = "error"
+    if session["state"] in ("open", "starting"):
+        session["state"] = "closed"
+    session["page"] = None
+
+
+async def remote_frame(user_id: int) -> Optional[bytes]:
+    s = _remote.get(user_id)
+    if not s or s["state"] != "open" or not s.get("page"):
+        return None
+    s["active"] = time.monotonic()
+    try:
+        return await s["page"].screenshot(type="jpeg", quality=60, timeout=10_000)
+    except Exception:
+        return None
+
+
+async def remote_input(user_id: int, kind: str, x: float = 0, y: float = 0, text: str = "", key: str = "",
+                       dy: float = 0) -> bool:
+    s = _remote.get(user_id)
+    if not s or s["state"] != "open" or not s.get("page"):
+        return False
+    s["active"] = time.monotonic()
+    page = s["page"]
+    if kind == "click":
+        await page.mouse.click(x, y)
+    elif kind == "type":
+        await page.keyboard.type(text[:500], delay=25)
+    elif kind == "key" and key in _KEYS:
+        await page.keyboard.press(key)
+    elif kind == "scroll":
+        await page.mouse.wheel(0, max(-2000, min(2000, dy)))
+    else:
+        return False
+    return True
+
+
+def remote_close(user_id: int) -> None:
+    s = _remote.get(user_id)
+    if s:
+        s["done"].set()
 
 
 _public_hosts: Dict[str, bool] = {}

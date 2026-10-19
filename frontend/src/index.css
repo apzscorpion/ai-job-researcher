@@ -1069,3 +1069,7 @@ input[type="range"] {
 .key-row-off { opacity: 0.6; }
 .key-active { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.8rem; color: #334155; cursor: pointer; }
 .sidebar-brand-logo { width: 32px; height: 32px; flex-shrink: 0; }
+.remote-view { border: 1px solid #cbd5e1; border-radius: 6px; overflow: hidden; outline: none; background: #f8fafc; }
+.remote-view:focus { box-shadow: 0 0 0 3px #93c5fd; }
+.remote-view img { width: 100%; display: block; cursor: pointer; user-select: none; }
+.remote-wait { padding: 3rem; text-align: center; color: #64748b; }

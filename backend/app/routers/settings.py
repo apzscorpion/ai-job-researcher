@@ -395,9 +395,10 @@ async def job_sites(
 
 
 @router.post("/job-sites/{site}/connect")
-def connect_job_site(
+async def connect_job_site(
     site: str,
     background_tasks: BackgroundTasks,
+    remote: bool = False,
     current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
     from app.services import connections
@@ -406,13 +407,64 @@ def connect_job_site(
 
     if site not in connections.SITES:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown job site")
-    if not is_admin(current_user):
-        # the login window opens on the machine running the app, which only its operator can see
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
-                            detail="Job-site logins open a browser on the host computer, so only the app's "
-                                   "owner can connect them. Your applications go by email, company sites and the AI agent.")
     if connections.busy(current_user.id, site):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT,
                             detail="That browser is already open or applying — finish there, then try again")
+    if not is_admin(current_user) or remote:
+        # Everyone else signs in through a live view in the website; the browser (with their own
+        # profile, never anyone else's) runs on the host machine
+        connections.start_remote(current_user.id, site)
+        return {"launched": True, "site": site, "remote": True}
     background_tasks.add_task(_connect_bg, current_user.id, site)
-    return {"launched": True, "site": site}
+    return {"launched": True, "site": site, "remote": False}
+
+
+@router.get("/job-sites/remote/status")
+def remote_status(current_user: User = Depends(get_current_user)) -> Dict[str, Any]:
+    from app.services import connections
+
+    st = connections.remote_status(current_user.id)
+    if st["state"] == "signed_in" and st.get("site") in ("linkedin", "naukri"):
+        _resume_platform(current_user.id, st["site"])
+    return st
+
+
+@router.get("/job-sites/remote/frame")
+async def remote_frame(current_user: User = Depends(get_current_user)):
+    from fastapi import Response
+
+    from app.services import connections
+
+    img = await connections.remote_frame(current_user.id)
+    if img is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No sign-in window open")
+    return Response(content=img, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+
+class RemoteInput(BaseModel):
+    kind: Literal["click", "type", "key", "scroll"]
+    x: Annotated[float, Field(ge=0, le=4000)] = 0
+    y: Annotated[float, Field(ge=0, le=4000)] = 0
+    text: Annotated[str, Field(max_length=500)] = ""
+    key: Annotated[str, Field(max_length=20)] = ""
+    dy: Annotated[float, Field(ge=-2000, le=2000)] = 0
+
+
+@router.post("/job-sites/remote/input")
+async def remote_input(body: RemoteInput, current_user: User = Depends(get_current_user)) -> Dict[str, bool]:
+    from app.security import rate_limit
+    from app.services import connections
+
+    rate_limit(f"remote-input:{current_user.id}", 300, 60)
+    ok = await connections.remote_input(current_user.id, body.kind, body.x, body.y, body.text, body.key, body.dy)
+    if not ok:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="The sign-in window is closed")
+    return {"ok": True}
+
+
+@router.post("/job-sites/remote/close")
+def remote_close(current_user: User = Depends(get_current_user)) -> Dict[str, bool]:
+    from app.services import connections
+
+    connections.remote_close(current_user.id)
+    return {"closed": True}
