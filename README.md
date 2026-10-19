@@ -128,3 +128,12 @@ pytest tests/ -v
   `--proxy-headers --forwarded-allow-ips 127.0.0.1` so login limits see real client IPs.
 - "Connect" on Settings → Job sites opens a browser window **on the server**, so job-site logins only
   work when the server is the user's own computer.
+
+## Running the public site from this PC
+
+The website is hosted on Vercel (project `ai-job-researcher-app`, https://ai-job-researcher-app.vercel.app);
+the backend runs on this PC and is reached through ngrok at https://equation-diligent-quaintly.ngrok-free.dev.
+
+- Start both with `powershell -ExecutionPolicy Bypass -File scripts\start-public.ps1` and keep the window open.
+- Redeploy the website after frontend changes: `cd frontend; npx vercel deploy --prod`.
+- The PC must stay on and awake; every user's searches and applications go out from its internet connection.
