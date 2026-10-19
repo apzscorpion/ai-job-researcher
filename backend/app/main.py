@@ -90,7 +90,7 @@ app.add_middleware(
         "ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:3000").split(",") if o.strip()],
     allow_credentials=False,  # auth is a bearer header, not cookies
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
-    allow_headers=["Authorization", "Content-Type"],
+    allow_headers=["Authorization", "Content-Type", "ngrok-skip-browser-warning"],
 )
 
 # ---------------------------------------------------------------------------
@@ -141,13 +141,12 @@ def health() -> dict:
     return {"status": "ok"}
 
 
-_ADMIN_EMAILS = {e.strip().lower() for e in os.environ.get("ADMIN_EMAILS", "").split(",") if e.strip()}
-
-
 @app.get("/api/logs", tags=["meta"])
 def get_logs(current_user=Depends(get_current_user)) -> dict:
     # Server logs mix every user's activity: only the operator (ADMIN_EMAILS in .env) may read them
-    if current_user.email.lower() not in _ADMIN_EMAILS:
+    from app.security import is_admin
+
+    if not is_admin(current_user):
         raise HTTPException(status_code=403, detail="Server logs are only available to the app's admin")
     return {"logs": list(_LOG_BUFFER)}
 

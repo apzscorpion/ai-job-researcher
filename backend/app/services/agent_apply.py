@@ -17,7 +17,8 @@ import asyncio
 import json
 import logging
 import re
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
 from app.config import OLLAMA_MODEL, OLLAMA_URL
 from app.models import Job, Profile, Settings, json_decode
@@ -76,23 +77,83 @@ _OBSERVE_JS = r"""
 """
 
 
+def format_obs(snaps: List[Dict[str, Any]]) -> str:
+    """Observation text for the model from per-frame snapshots (_OBSERVE_JS output, here or from the extension)."""
+    parts: List[str] = []
+    for i, snap in enumerate(snaps):
+        if not snap.get("elements") and i:
+            continue
+        head = f"=== {'PAGE' if i == 0 else 'IFRAME'} {str(snap.get('url', ''))[:120]} — {str(snap.get('title', ''))[:80]}"
+        parts.append(head + "\nVisible text:\n" + str(snap.get("text", ""))[:2500] + "\nElements:\n"
+                     + "\n".join(json.dumps(e, ensure_ascii=False) for e in (snap.get("elements") or [])[:140]))
+    return "\n\n".join(parts)[:16000]
+
+
+_CAPTCHA_URL = re.compile(r"recaptcha/api2/bframe|hcaptcha|challenges\.cloudflare", re.I)
+
+
+def screen_check(snaps: List[Dict[str, Any]]) -> Optional[Tuple[str, str]]:
+    """Decisions taken from the page itself, never left to the model: confirmation, captcha, password."""
+    url = str(snaps[0].get("url", "")) if snaps else ""
+    host = urlparse(url).netloc.removeprefix("www.") or "the site"
+    if any(_CONFIRM.search(str(s.get("text", ""))) for s in snaps):
+        return "applied", f"Applied on {host} — the site confirmed the application (AI agent)."
+    if any(_CAPTCHA_URL.search(str(s.get("url", ""))) for s in snaps):
+        return "needs_manual", f"The site asked for a captcha / human check. Finish it here: {url}"
+    if any(e.get("type") == "password" for s in snaps for e in (s.get("elements") or [])):
+        return "needs_manual", (f"{host} wants you to log in or create an account. Sign in there in your browser "
+                                f"and retry, or finish here: {url}")
+    return None
+
+
+async def plan_step(job: Job, profile: Profile, settings: Settings, goal: str, cover_letter: str, email: str,
+                    history: List[str], obs: str) -> Tuple[Dict[str, Any], str]:
+    """One model call: {status, reason, actions} for the current page (shared by the server and the extension)."""
+    from app.services.llm import generate, providers_for
+
+    prompt = _prompt(goal, job, _candidate(profile, settings, email, cover_letter), profile.resume_text or "",
+                     cover_letter, history, obs)
+    used = ""
+    for _attempt in range(2):  # a reply that isn't valid JSON gets one retry
+        raw, used = await generate(prompt, providers_for(settings), OLLAMA_MODEL, OLLAMA_URL,
+                                   json_mode=True, timeout=180)
+        plan = _parse_plan(raw)
+        if plan:
+            return plan, used
+        logger.warning("agent_apply: unusable reply from %s: %r", used, (raw or "")[:300])
+    return {}, used
+
+
+def _parse_plan(raw: str) -> Dict[str, Any]:
+    """The model's plan; a bare list of actions (some models reply that way) counts as "continue"."""
+    text = re.sub(r"^```(json)?|```$", "", (raw or "").strip(), flags=re.M).strip()
+    starts = [i for i in (text.find("{"), text.find("[")) if i >= 0]
+    if not starts:
+        return {}
+    start = min(starts)
+    end = text.rfind("}" if text[start] == "{" else "]")
+    try:
+        plan = json.loads(text[start:end + 1])
+    except ValueError:
+        return {}
+    if isinstance(plan, list):
+        return {"status": "continue", "reason": "", "actions": [a for a in plan if isinstance(a, dict)]}
+    return plan if isinstance(plan, dict) and ("status" in plan or "actions" in plan) else {}
+
+
 async def _observe(page) -> Tuple[str, Dict[str, Any]]:
     """Text for the LLM plus {element id: frame} for acting on it."""
     frames: Dict[str, Any] = {}
-    parts: List[str] = []
+    snaps: List[Dict[str, Any]] = []
     for i, frame in enumerate(page.frames[:6]):
         try:
             snap = await frame.evaluate(_OBSERVE_JS, f"f{i}e")
         except Exception:
             continue
-        if not snap["elements"] and i:
-            continue
         for el in snap["elements"]:
             frames[el["id"]] = frame
-        head = f"=== {'PAGE' if i == 0 else 'IFRAME'} {snap['url'][:120]} — {snap['title'][:80]}"
-        parts.append(head + "\nVisible text:\n" + snap["text"] + "\nElements:\n"
-                     + "\n".join(json.dumps(e, ensure_ascii=False) for e in snap["elements"]))
-    return "\n\n".join(parts)[:16000], frames
+        snaps.append(snap)
+    return format_obs(snaps), frames
 
 
 def _host(page) -> str:
@@ -202,10 +263,6 @@ async def _act(page, frames: Dict[str, Any], action: Dict[str, Any], files: Dict
 
 async def agent_apply(page, job: Job, profile: Profile, settings: Settings, goal: str,
                       cover_letter: str = "", cover_letter_path: str = "", email: str = "") -> Tuple[str, str]:
-    from app.services.llm import generate, providers_for
-
-    providers = providers_for(settings)
-    candidate = _candidate(profile, settings, email, cover_letter)
     files = {"resume": profile.resume_path or "", "cover_letter": cover_letter_path}
     history: List[str] = []
     claimed = False
@@ -226,14 +283,7 @@ async def agent_apply(page, job: Job, profile: Profile, settings: Settings, goal
                                     f"(Settings → Job sites → Connect) and retry, or finish here: {page.url}")
 
         obs, frames = await _observe(page)
-        raw, used = await generate(_prompt(goal, job, candidate, profile.resume_text or "", cover_letter,
-                                           history, obs), providers, OLLAMA_MODEL, OLLAMA_URL,
-                                   json_mode=True, timeout=180)
-        match = re.search(r"\{.*\}", raw or "", re.S)
-        try:
-            plan = json.loads(match.group(0)) if match else {}
-        except ValueError:
-            plan = {}
+        plan, used = await plan_step(job, profile, settings, goal, cover_letter, email, history, obs)
         if not plan:
             return "needs_manual", f"The AI agent got no usable reply (AI quota?). Finish it here: {page.url}"
         status, reason = plan.get("status", "continue"), str(plan.get("reason", ""))[:200]

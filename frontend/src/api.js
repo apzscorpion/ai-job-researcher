@@ -19,6 +19,8 @@ export async function apiFetch(path, options = {}) {
   if (!(options.body instanceof FormData)) {
     headers['Content-Type'] = 'application/json'
   }
+  // ngrok's free tier shows a warning page instead of the API unless this header is sent
+  headers['ngrok-skip-browser-warning'] = '1'
 
   if (token) {
     headers['Authorization'] = `Bearer ${token}`

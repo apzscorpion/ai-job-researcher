@@ -224,3 +224,12 @@ def test_quota_status_reports_blocked_models(monkeypatch):
     llm._block("k-123456", "m1", 3600, "rate-limited")
     status = llm.quota_status(None)[0]
     assert status["out"] and status["blocked"][0]["why"] == "rate-limited" and 59 <= status["blocked"][0]["minutes"] <= 61
+
+
+def test_agent_plan_parsing_accepts_object_list_and_fences():
+    from app.services.agent_apply import _parse_plan
+
+    assert _parse_plan('{"status": "applied", "reason": "done", "actions": []}')["status"] == "applied"
+    plan = _parse_plan('```json\n[{"type": "click", "id": "f0e1"}]\n```')
+    assert plan["status"] == "continue" and plan["actions"][0]["id"] == "f0e1"
+    assert _parse_plan("I cannot help with that") == {}

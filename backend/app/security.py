@@ -65,6 +65,14 @@ def check_public_url(url: str, schemes: Iterable[str] = ("https",)) -> None:
     check_public_host(parsed.hostname, parsed.port)
 
 
+def is_admin(user) -> bool:
+    """The app's operator (ADMIN_EMAILS in .env): server logs, and job-site logins on this machine."""
+    import os
+
+    admins = {e.strip().lower() for e in os.environ.get("ADMIN_EMAILS", "").split(",") if e.strip()}
+    return bool(user and user.email and user.email.lower() in admins)
+
+
 def http_url_or_none(url: Optional[str]) -> Optional[str]:
     return url if url and urlparse(url).scheme in ("http", "https") and urlparse(url).netloc else None
 

@@ -423,7 +423,12 @@ async def _process_apply_queue() -> None:
         for app, job in queued:
             by_user.setdefault(app.user_id, []).append((app, job))
 
+        # Browsers running right now across ALL users: the host PC runs them, so cap the total
+        global_free = _MAX_TOTAL - session.exec(
+            select(func.count()).select_from(Application).where(Application.status == "applying")).one()
         for user_id, items in by_user.items():
+            if global_free <= 0:
+                break
             settings = session.exec(select(Settings).where(Settings.user_id == user_id)).first()
             profile = session.exec(select(Profile).where(Profile.user_id == user_id)).first()
             if not settings or not profile:
@@ -460,7 +465,7 @@ async def _process_apply_queue() -> None:
                 .where(Application.user_id == user_id, Application.status == "applying")).all()}
             chosen = []
             for app, job in items:
-                if len(chosen) >= min(_MAX_PARALLEL, settings.daily_cap - applied_today):
+                if len(chosen) >= min(_MAX_PARALLEL, settings.daily_cap - applied_today, global_free):
                     break
                 route = route_for(job)
                 group = _group(job, route)
@@ -475,6 +480,7 @@ async def _process_apply_queue() -> None:
                 busy.add(group)
                 chosen.append((app, route, group))
 
+            global_free -= len(chosen)
             for app, route, _group_key in chosen:
                 app.status, app.method, app.notes = "applying", route, "Applying now…"
                 app.applied_at = now_utc.replace(tzinfo=None)
@@ -500,6 +506,7 @@ def _group(job, route: str) -> str:
 
 
 _MAX_PARALLEL = 4                       # browsers / AI agents running at once per user
+_MAX_TOTAL = int(__import__("os").environ.get("MAX_PARALLEL_APPLIES", "6"))  # ...and for everyone together
 _group_done: Dict[tuple, float] = {}    # (user_id, platform) -> when its last application finished
 _tasks: set = set()                     # keeps running applications from being garbage-collected
 

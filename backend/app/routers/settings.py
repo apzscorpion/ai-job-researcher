@@ -402,8 +402,15 @@ def connect_job_site(
 ) -> Dict[str, Any]:
     from app.services import connections
 
+    from app.security import is_admin
+
     if site not in connections.SITES:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown job site")
+    if not is_admin(current_user):
+        # the login window opens on the machine running the app, which only its operator can see
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail="Job-site logins open a browser on the host computer, so only the app's "
+                                   "owner can connect them. Your applications go by email, company sites and the AI agent.")
     if connections.busy(current_user.id, site):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT,
                             detail="That browser is already open or applying — finish there, then try again")
