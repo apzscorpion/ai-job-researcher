@@ -4,6 +4,7 @@ import {
   testEmail, connectJobSite, getJobSites,
 } from '../api'
 import Spinner from '../components/Spinner'
+import KeyField from '../components/KeyField'
 
 // ---------------------------------------------------------------------------
 // Helper toggle
@@ -414,7 +415,7 @@ export default function Settings() {
         {geminiErr && <div className="alert alert-error">⚠️ {geminiErr}</div>}
         {geminiSaved && (
           <div className="alert alert-info" style={{ marginBottom: '0.75rem' }}>
-            🔑 API key is saved (masked: <code>***</code>)
+            🔑 A key is saved. 👁 shows it, 🧪 Test checks it against every Gemini model the app uses.
           </div>
         )}
         <form onSubmit={handleGeminiSave}>
@@ -422,14 +423,9 @@ export default function Settings() {
             <label className="form-label">
               {geminiSaved ? 'Replace API Key' : 'API Key'}
             </label>
-            <input
-              type="password"
-              className="form-control"
-              value={geminiKey}
-              onChange={e => setGeminiKey(e.target.value)}
-              placeholder={geminiSaved ? 'Enter new key to replace…' : 'AIza…'}
-              style={{ maxWidth: 400 }}
-            />
+            <KeyField savedId={geminiSaved ? 'gemini' : null} value={geminiKey} onChange={setGeminiKey}
+              placeholder={geminiSaved ? 'Saved — 👁 to show, or type a new key to replace' : 'AIza…'}
+              test={{ kind: 'gemini' }} style={{ maxWidth: 640 }} />
           </div>
           <button type="submit" className="btn btn-primary" disabled={geminiSaving}>
             {geminiSaving ? <><Spinner size="sm" /> Saving…</> : '💾 Save Key'}
@@ -443,13 +439,14 @@ export default function Settings() {
           Used for scoring, cover letters, emails and form answers. They are tried in order after the main
           Gemini key; when one runs out of its free daily quota the next takes over, and your PC's local model is
           the last resort. Any OpenAI-compatible API works (Groq, OpenRouter, OpenAI, Mistral, DeepSeek…).
-          Keys are stored encrypted and only the last 4 characters are shown.
+          Keys are stored encrypted; 👁 shows a saved key, 🧪 Test sends one tiny request and shows the provider's
+          answer (works before saving too).
         </p>
         {provMsg && <div className="alert alert-success">✅ {provMsg}</div>}
         {provErr && <div className="alert alert-error">⚠️ {provErr}</div>}
         <form onSubmit={handleProvidersSave}>
           {providers.map((p, i) => (
-            <div key={p.id || `new-${i}`} className="edit-row">
+            <div key={p.id || `new-${i}`} className="edit-row" style={{ alignItems: 'flex-start' }}>
               <span className="badge badge-pending" style={{ minWidth: 24 }}>{i + 1}</span>
               <input className="form-control" aria-label="Name" placeholder="Name"
                 value={p.name} onChange={e => editProvider(i, 'name', e.target.value)} />
@@ -461,10 +458,10 @@ export default function Settings() {
                     value={p.model} onChange={e => editProvider(i, 'model', e.target.value)} />
                 </>
               )}
-              <input className="form-control" type="password" aria-label="API key"
-                placeholder={p.id ? 'Key saved — type to replace' : 'API key'}
+              <KeyField savedId={p.id} placeholder={p.id ? 'Saved — 👁 to show, or type to replace' : 'API key'}
                 value={p.key?.startsWith('…') ? '' : p.key}
-                onChange={e => editProvider(i, 'key', e.target.value)} />
+                onChange={v => editProvider(i, 'key', v)}
+                test={{ kind: p.kind, base_url: p.base_url, model: p.model }} style={{ flex: '1 1 300px' }} />
               <button type="button" className="btn btn-danger btn-sm" aria-label={`Remove ${p.name}`}
                 onClick={() => setProviders(list => list.filter((_, j) => j !== i))}>🗑</button>
             </div>

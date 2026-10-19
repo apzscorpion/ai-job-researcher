@@ -46,3 +46,18 @@ def test_register_rejects_weak_password_and_logs_are_admin_only():
     assert r.status_code == 422
     assert client.get("/docs").status_code == 404
     assert client.get("/api/health").headers["x-frame-options"] == "DENY"
+
+
+def test_key_errors_are_explained_with_provider_message():
+    from app.services.llm import _explain
+
+    assert _explain(401, "User not found.").startswith("the key was rejected")
+    assert "HTTP 429" in _explain(429, "slow down") and "slow down" in _explain(429, "slow down")
+
+
+def test_reveal_and_key_test_need_login():
+    from app.main import app
+
+    client = TestClient(app)
+    assert client.post("/api/settings/keys/gemini/reveal").status_code == 401
+    assert client.post("/api/settings/keys/test", json={"kind": "gemini"}).status_code == 401

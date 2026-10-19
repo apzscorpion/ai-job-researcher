@@ -139,6 +139,14 @@ export async function testEmail() {
   return apiFetch('/settings/test-email', { method: 'POST' })
 }
 
+export async function revealKey(keyId) {
+  return apiFetch(`/settings/keys/${encodeURIComponent(keyId)}/reveal`, { method: 'POST' })
+}
+
+export async function testKey(body) {
+  return apiFetch('/settings/keys/test', { method: 'POST', body: JSON.stringify(body) })
+}
+
 export async function connectJobSite(site) {
   return apiFetch(`/settings/job-sites/${site}/connect`, { method: 'POST' })
 }

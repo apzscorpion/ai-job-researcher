@@ -258,6 +258,66 @@ def test_email(
 
 
 # ---------------------------------------------------------------------------
+# AI keys: reveal (eye button) and live test
+# ---------------------------------------------------------------------------
+
+def _stored_key(s: Settings, key_id: str) -> str:
+    if key_id == "gemini":
+        return crypto.decrypt(s.gemini_key_enc) if s.gemini_key_enc else ""
+    return next((p.get("key", "") for p in _providers(s) if p.get("id") == key_id), "")
+
+
+@router.post("/keys/{key_id}/reveal")
+def reveal_key(
+    key_id: str,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+) -> Dict[str, str]:
+    """The full saved key, only when the owner clicks the eye button (never sent with the settings)."""
+    from app.security import rate_limit
+
+    rate_limit(f"reveal:{current_user.id}", 30, 600)
+    key = _stored_key(_get_settings(current_user.id, session), key_id[:40])
+    if not key:
+        raise HTTPException(status_code=404, detail="No saved key")
+    return {"key": key}
+
+
+class KeyTest(BaseModel):
+    id: Optional[Short] = None            # "gemini" or a provider id: use the saved key when key is blank
+    kind: Literal["gemini", "openai"]
+    base_url: Short = ""
+    model: Short = ""
+    key: Annotated[str, Field(max_length=500)] = ""
+
+
+@router.post("/keys/test")
+async def test_key(
+    body: KeyTest,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+) -> Dict[str, Any]:
+    """Send one tiny request with this key and report exactly what the provider answered."""
+    from app.security import rate_limit
+    from app.services.llm import test_provider
+
+    rate_limit(f"keytest:{current_user.id}", 20, 600, "Too many key tests — wait a few minutes")
+    key = body.key.strip() if body.key.strip() and not body.key.startswith("…") else         _stored_key(_get_settings(current_user.id, session), body.id or "")
+    if not key:
+        raise HTTPException(status_code=422, detail="Enter a key (or save one) to test")
+    if body.kind == "openai":
+        if not body.model.strip():
+            raise HTTPException(status_code=422, detail="Enter the model name to test")
+        try:
+            check_public_url(body.base_url.strip(), ("https",))
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=f"Base URL: {exc}")
+    results = await test_provider({"kind": body.kind, "key": key, "base_url": body.base_url.strip(),
+                                   "model": body.model.strip()})
+    return {"ok": any(r["ok"] for r in results), "results": results}
+
+
+# ---------------------------------------------------------------------------
 # Job-site connections (Settings → Job sites)
 # ---------------------------------------------------------------------------
 

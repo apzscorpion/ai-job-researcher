@@ -209,6 +209,87 @@ async def _openai_chat(p: Dict[str, str], prompt: str, json_mode: bool) -> str:
         return ""
 
 
+_TEST_PROMPT = "Reply with exactly: OK"
+
+
+def _explain(code: int, message: str) -> str:
+    """The provider's error in plain words, keeping its own message."""
+    what = {400: "bad request — often an invalid API key or model name", 401: "the key was rejected (invalid or revoked)",
+            402: "payment required — no credits left on this account", 403: "the key isn't allowed to use this model",
+            404: "model not found — check the model name", 429: "quota or rate limit used up",
+            500: "provider error", 502: "provider unavailable", 503: "provider overloaded — try again shortly"}
+    return f"{what.get(code, 'error')} (HTTP {code}): {message.strip()[:300]}"
+
+
+async def test_provider(p: Dict[str, str]) -> List[Dict[str, Any]]:
+    """One tiny live request per model of *p*; what the provider really answered (Settings → Test).
+
+    A success also clears an earlier quota block, so the status header reflects it.
+    """
+    results: List[Dict[str, Any]] = []
+    if p.get("kind") == "gemini":
+        from google import genai  # type: ignore
+        from google.genai import errors  # type: ignore
+
+        client = genai.Client(api_key=p["key"])
+        for model in GEMINI_MODELS:
+            start = time.monotonic()
+            try:
+                resp = await asyncio.wait_for(asyncio.to_thread(
+                    client.models.generate_content, model=model, contents=_TEST_PROMPT), timeout=60)
+                ms = int((time.monotonic() - start) * 1000)
+                usage = getattr(resp, "usage_metadata", None)
+                results.append({"model": model, "ok": True, "status": 200, "ms": ms, "reply": (resp.text or "").strip()[:200],
+                                "tokens": getattr(usage, "total_token_count", None)})
+                _blocked.pop(_slot(p["key"], model), None)
+            except errors.APIError as exc:
+                detail = _explain(exc.code or 0, getattr(exc, "message", "") or str(exc))
+                retry = re.search(r"retryDelay': '(\d+)s'", str(exc))
+                if retry:
+                    detail += f" — retry in {retry.group(1)} s"
+                if exc.code == 429:
+                    _block(p["key"], model, int(retry.group(1)) if retry else 3600, "quota used up")
+                results.append({"model": model, "ok": False, "status": exc.code, "error": detail})
+            except asyncio.TimeoutError:
+                results.append({"model": model, "ok": False, "status": None, "error": "no answer within 60 s"})
+            except Exception as exc:
+                results.append({"model": model, "ok": False, "status": None, "error": f"{type(exc).__name__}: {str(exc)[:300]}"})
+        return results
+
+    from app.security import block_private_hook
+
+    model = p.get("model") or ""
+    start = time.monotonic()
+    try:
+        async with httpx.AsyncClient(timeout=60.0, event_hooks={"request": [block_private_hook]}) as client:
+            resp = await client.post(f"{p.get('base_url', '').rstrip('/')}/chat/completions",
+                                     json={"model": model, "messages": [{"role": "user", "content": _TEST_PROMPT}]},
+                                     headers={"Authorization": f"Bearer {p['key']}"})
+        ms = int((time.monotonic() - start) * 1000)
+        try:
+            body = resp.json()
+        except ValueError:
+            body = {}
+        if resp.status_code == 200 and body.get("choices"):
+            _blocked.pop(_slot(p["key"], model), None)
+            return [{"model": body.get("model") or model, "ok": True, "status": 200, "ms": ms,
+                     "reply": (body["choices"][0]["message"].get("content") or "").strip()[:200],
+                     "tokens": (body.get("usage") or {}).get("total_tokens")}]
+        err = body.get("error")
+        message = (err.get("message") if isinstance(err, dict) else err) or resp.text[:300]
+        raw = ((err.get("metadata") or {}).get("raw") if isinstance(err, dict) else None)
+        if raw:  # OpenRouter puts the upstream provider's real reason here
+            message = f"{message} — {str(raw)[:240]}"
+        detail = _explain(resp.status_code, str(message))
+        if resp.status_code == 429:
+            wait = resp.headers.get("retry-after")
+            detail += f" — retry in {wait} s" if wait else ""
+            _block(p["key"], model, float(wait) if wait and wait.isdigit() else 3600, "rate-limited")
+        return [{"model": model, "ok": False, "status": resp.status_code, "error": detail}]
+    except httpx.HTTPError as exc:
+        return [{"model": model, "ok": False, "status": None, "error": f"couldn't reach the provider: {str(exc)[:300]}"}]
+
+
 async def gemini_search(query: str, api_key: str) -> str:
     """Use Gemini with Google Search grounding to answer a query; "" on failure."""
     from google.genai import types  # type: ignore
