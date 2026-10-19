@@ -231,6 +231,23 @@ export default function Settings() {
     finally { setProvSaving(false) }
   }
 
+  // Switch a key on/off right away; turning a Gemini key on turns the other Gemini keys off
+  async function handleActivate(i, on) {
+    const gem = providers[i].kind === 'gemini'
+    const next = providers.map((p, j) => j === i ? { ...p, active: on }
+      : (on && gem && p.kind === 'gemini') ? { ...p, active: false } : p)
+    setProviders(next)
+    if (!next[i].id) return  // not saved yet: applies with "Save keys"
+    setProvMsg(''); setProvErr('')
+    try {
+      const data = await updateSettings({ ai_providers: next.filter(p => p.id) })
+      setProviders([...(data.ai_providers || []), ...next.filter(p => !p.id)])
+      const name = next[i].name || 'This key'
+      setProvMsg(gem && on ? `“${name}” is now the Gemini key used for all Gemini calls.`
+                           : `“${name}” is ${on ? 'active' : 'switched off — kept but not used'}.`)
+    } catch (err) { setProvErr(err.message) }
+  }
+
   // Delete one key right away (unsaved rows just disappear)
   async function handleKeyDelete(i) {
     const row = providers[i]
@@ -407,7 +424,8 @@ export default function Settings() {
           Used for scoring, cover letters, emails, form answers and the AI site agent — tried top to bottom; when
           one runs out of quota the next takes over, and your PC's local model is the last resort. 👁 shows a
           saved key, 🧪 Test sends one tiny request and shows the provider's answer (works before saving too),
-          🗑 deletes. Keys are stored encrypted. Most providers can't tell which account a key belongs to, so put
+          🗑 deletes. Only one Gemini key is active at a time (the radio button) — add more Gemini keys and pick
+          which one is used; switched-off keys are kept but never used. Keys are stored encrypted. Most providers can't tell which account a key belongs to, so put
           it in the label.
         </p>
         {provMsg && <div className="alert alert-success">✅ {provMsg}</div>}
@@ -416,7 +434,7 @@ export default function Settings() {
           <ul className="key-list" aria-label="AI keys">
             {providers.length === 0 && <li className="form-hint">No keys yet — add one below.</li>}
             {providers.map((p, i) => (
-              <li key={p.id || `new-${i}`} className="key-row">
+              <li key={p.id || `new-${i}`} className={`key-row${p.active === false ? ' key-row-off' : ''}`}>
                 <span className="badge badge-pending key-row-n">{i + 1}</span>
                 <div className="key-row-body">
                   <div className="key-row-line">
@@ -424,6 +442,17 @@ export default function Settings() {
                       placeholder="Label (e.g. Gemini – personal Gmail)"
                       value={p.name} onChange={e => editProvider(i, 'name', e.target.value)} />
                     <span className="badge badge-info">{p.kind === 'gemini' ? 'Gemini' : 'OpenAI-compatible'}</span>
+                    {p.kind === 'gemini'
+                      ? <label className="key-active" title="Only one Gemini key is used at a time">
+                          <input type="radio" name="gemini-active" checked={p.active !== false}
+                            onChange={() => handleActivate(i, true)} />
+                          {p.active !== false ? 'Active — used for Gemini calls' : 'Use this Gemini key'}
+                        </label>
+                      : <label className="key-active">
+                          <input type="checkbox" checked={p.active !== false}
+                            onChange={e => handleActivate(i, e.target.checked)} />
+                          {p.active !== false ? 'Active' : 'Off'}
+                        </label>}
                     {!p.id && <span className="badge badge-warning">not saved</span>}
                     <button type="button" className="btn btn-danger btn-sm" aria-label={`Delete ${p.name}`}
                       onClick={() => handleKeyDelete(i)}>🗑 Delete</button>
@@ -450,7 +479,12 @@ export default function Settings() {
               {Object.entries(PROVIDER_PRESETS).map(([k, v]) => <option key={k} value={k}>{v.name}</option>)}
             </select>
             <button type="button" className="btn btn-secondary btn-sm"
-              onClick={() => setProviders(list => [...list, { ...PROVIDER_PRESETS[providerPreset], key: '' }])}>
+              onClick={() => setProviders(list => {
+                const preset = PROVIDER_PRESETS[providerPreset]
+                // a second Gemini key starts switched off; pick it with its radio button
+                const active = !(preset.kind === 'gemini' && list.some(p => p.kind === 'gemini' && p.active !== false))
+                return [...list, { ...preset, key: '', active }]
+              })}>
               ➕ Add new key
             </button>
             <button type="submit" className="btn btn-primary btn-sm" disabled={provSaving}>

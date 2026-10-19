@@ -1066,3 +1066,5 @@ input[type="range"] {
 .key-row-n { margin-top: 0.45rem; min-width: 24px; text-align: center; }
 .key-row-body { flex: 1; min-width: 0; display: grid; gap: 0.4rem; }
 .key-row-line { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+.key-row-off { opacity: 0.6; }
+.key-active { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.8rem; color: #334155; cursor: pointer; }

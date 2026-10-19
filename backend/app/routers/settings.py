@@ -45,6 +45,7 @@ class ProviderIn(BaseModel):
     base_url: Short = ""
     model: Short = ""
     account: Short = ""  # which account the key belongs to (the user's label; APIs don't tell)
+    active: bool = True  # inactive keys are kept but never used; at most one Gemini key is active
     key: Annotated[str, Field(max_length=500)] = ""  # empty or masked = keep the stored key for this id
 
 
@@ -65,6 +66,7 @@ def _merge_providers(s: Settings, incoming: List[ProviderIn]) -> List[Dict[str, 
     """New provider list; blank keys keep the stored key of the same id."""
     stored = {p["id"]: p for p in _providers(s) if p.get("id")}
     merged = []
+    gemini_active = False
     for p in incoming:
         if p.kind == "openai":
             # The server calls this URL with the key: only public https APIs, never the server's own network
@@ -80,9 +82,12 @@ def _merge_providers(s: Settings, incoming: List[ProviderIn]) -> List[Dict[str, 
         key = p.key.strip() if p.key.strip() and not p.key.startswith("…") else stored.get(pid, {}).get("key", "")
         if not key:
             raise HTTPException(status_code=422, detail=f"API key is required for {p.name or p.kind}")
+        # one Gemini key at a time: the first one marked active wins, the others are switched off
+        active = p.active and not (p.kind == "gemini" and gemini_active)
+        gemini_active |= p.kind == "gemini" and active
         merged.append({"id": pid, "kind": p.kind, "name": p.name.strip() or p.kind.title(),
                        "base_url": p.base_url.strip(), "model": p.model.strip(),
-                       "account": p.account.strip(), "key": key})
+                       "account": p.account.strip(), "active": active, "key": key})
     return merged
 
 
@@ -98,7 +103,8 @@ def _settings_to_dict(s: Settings) -> Dict[str, Any]:
         "smtp_tls": s.smtp_tls,
         "gemini_key": "***" if s.gemini_key_enc else "",
         "gemini_account": s.gemini_account or "",
-        "ai_providers": [{**{k: v for k, v in p.items() if k != "key"}, "key": f"…{p.get('key', '')[-4:]}"}
+        "ai_providers": [{**{k: v for k, v in p.items() if k != "key"}, "active": p.get("active", True),
+                          "key": f"…{p.get('key', '')[-4:]}"}
                          for p in _providers(s)],
         "standard_answers": json_decode(s.standard_answers, {}) or {},
         "auto_send_email": s.auto_send_email,

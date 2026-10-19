@@ -61,3 +61,22 @@ def test_reveal_and_key_test_need_login():
     client = TestClient(app)
     assert client.post("/api/settings/keys/gemini/reveal").status_code == 401
     assert client.post("/api/settings/keys/test", json={"kind": "gemini"}).status_code == 401
+
+
+def test_only_one_gemini_key_is_active_and_inactive_keys_are_unused():
+    import json
+    from types import SimpleNamespace
+
+    from app import crypto
+    from app.routers.settings import ProviderIn, _merge_providers
+    from app.services.llm import providers_for
+
+    s = SimpleNamespace(ai_providers_enc=None, gemini_key_enc=None)
+    merged = _merge_providers(s, [
+        ProviderIn(kind="gemini", name="G1", key="AIza-one", active=True),
+        ProviderIn(kind="gemini", name="G2", key="AIza-two", active=True),
+        ProviderIn(kind="openai", name="OR", key="sk-x", base_url="https://1.1.1.1/v1", model="m", active=False),
+    ])
+    assert [p["active"] for p in merged] == [True, False, False]
+    s.ai_providers_enc = crypto.encrypt(json.dumps(merged))
+    assert [p["name"] for p in providers_for(s)] == ["G1"]

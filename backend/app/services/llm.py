@@ -130,7 +130,8 @@ def providers_for(settings: Any) -> List[Dict[str, str]]:
     if settings.gemini_key_enc:
         found.append({"kind": "gemini", "name": "Gemini", "key": crypto.decrypt(settings.gemini_key_enc)})
     if settings.ai_providers_enc:
-        found += [p for p in json_decode(crypto.decrypt(settings.ai_providers_enc), []) if p.get("key")]
+        found += [p for p in json_decode(crypto.decrypt(settings.ai_providers_enc), [])
+                  if p.get("key") and p.get("active", True)]  # switched-off keys are never used
     return [p for p in found if p.get("key")]
 
 
@@ -245,8 +246,16 @@ async def test_provider(p: Dict[str, str]) -> List[Dict[str, Any]]:
             except errors.APIError as exc:
                 detail = _explain(exc.code or 0, getattr(exc, "message", "") or str(exc))
                 retry = re.search(r"retryDelay': '(\d+)s'", str(exc))
+                metric = re.search(r"Quota exceeded for metric: ([\w./-]+)", str(exc))
+                if metric:
+                    detail += f" [quota: {metric.group(1)}]"
+                if "free_tier" in str(exc):
+                    detail += (" — this key is on Google's FREE tier. A Gemini Pro / Google One subscription "
+                               "doesn't cover the API: turn on billing for this key's project in AI Studio "
+                               "(Get API key → Set up billing) to lift the limit")
                 if retry:
-                    detail += f" — retry in {retry.group(1)} s"
+                    s = int(retry.group(1))
+                    detail += f" — resets in {s // 3600} h {s % 3600 // 60} min" if s >= 3600 else f" — retry in {s} s"
                 if exc.code == 429:
                     _block(p["key"], model, int(retry.group(1)) if retry else 3600, "quota used up")
                 results.append({"model": model, "ok": False, "status": exc.code, "error": detail})
