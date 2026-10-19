@@ -2,7 +2,8 @@
 // api.js — Centralised fetch wrapper + all API endpoint functions
 // ---------------------------------------------------------------------------
 
-const API_BASE = '/api'
+// Same-origin /api in development (Vite proxy); the backend's https URL when hosted (VITE_API_BASE)
+const API_BASE = (import.meta.env.VITE_API_BASE || '').replace(/\/$/, '') + '/api'
 
 // ---------------------------------------------------------------------------
 // Core fetch wrapper

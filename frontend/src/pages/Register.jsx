@@ -47,7 +47,8 @@ export default function Register() {
     <div className="auth-container">
       <div className="auth-card">
         <div className="auth-logo">
-          <h1>🤖 AI Job Researcher</h1>
+          <img src="/logo.svg" alt="" width="56" height="56" style={{ display: "block", margin: "0 auto 0.5rem" }} />
+          <h1>AI Job Researcher</h1>
           <p>Create a new account</p>
         </div>
 

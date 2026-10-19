@@ -12,7 +12,8 @@ from dotenv import load_dotenv
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 load_dotenv(REPO_ROOT / ".env")
 
-DATA_DIR = REPO_ROOT / "data"
+# Hosting: point DATA_DIR at a persistent volume (database, résumés, browser sessions live here)
+DATA_DIR = Path(os.environ["DATA_DIR"]) if os.environ.get("DATA_DIR") else REPO_ROOT / "data"
 RESUMES_DIR = DATA_DIR / "resumes"
 BROWSERS_DIR = DATA_DIR / "browsers"
 RESUMES_DIR.mkdir(parents=True, exist_ok=True)

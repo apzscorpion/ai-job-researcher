@@ -1068,3 +1068,4 @@ input[type="range"] {
 .key-row-line { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
 .key-row-off { opacity: 0.6; }
 .key-active { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.8rem; color: #334155; cursor: pointer; }
+.sidebar-brand-logo { width: 32px; height: 32px; flex-shrink: 0; }

@@ -28,7 +28,7 @@ export default function Sidebar({ onOpenLogs }) {
   return (
     <aside className="sidebar">
       <div className="sidebar-brand">
-        <span className="sidebar-brand-icon">🤖</span>
+        <img src="/logo.svg" alt="" className="sidebar-brand-logo" width="32" height="32" />
         AI Job Researcher
       </div>
 
