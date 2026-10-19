@@ -1052,3 +1052,17 @@ input[type="range"] {
 .key-test { list-style: none; margin: 0.35rem 0 0; padding: 0; font-size: 0.78rem; display: grid; gap: 0.2rem; }
 .key-test-ok  { color: #166534; }
 .key-test-bad { color: #b91c1c; word-break: break-word; }
+
+.key-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.6rem; }
+.key-row {
+  display: flex;
+  gap: 0.6rem;
+  align-items: flex-start;
+  padding: 0.75rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+.key-row-n { margin-top: 0.45rem; min-width: 24px; text-align: center; }
+.key-row-body { flex: 1; min-width: 0; display: grid; gap: 0.4rem; }
+.key-row-line { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }

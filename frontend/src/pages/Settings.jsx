@@ -37,7 +37,7 @@ function Section({ title, icon, children }) {
 
 // Starting points for extra AI providers; model names change, so check the provider's docs
 const PROVIDER_PRESETS = {
-  gemini:     { kind: 'gemini', name: 'Gemini (extra key)', base_url: '', model: '' },
+  gemini:     { kind: 'gemini', name: 'Gemini', base_url: '', model: '' },
   groq:       { kind: 'openai', name: 'Groq',       base_url: 'https://api.groq.com/openai/v1', model: 'llama-3.3-70b-versatile' },
   openrouter: { kind: 'openai', name: 'OpenRouter', base_url: 'https://openrouter.ai/api/v1',   model: 'google/gemma-4-31b-it:free' },
   openai:     { kind: 'openai', name: 'OpenAI',     base_url: 'https://api.openai.com/v1',      model: 'gpt-4o-mini' },
@@ -74,14 +74,8 @@ export default function Settings() {
   const [testEmailMsg, setTestEmailMsg] = useState('')
   const [testEmailErr, setTestEmailErr] = useState('')
 
-  const [geminiSaving, setGeminiSaving] = useState(false)
-  const [geminiMsg, setGeminiMsg]       = useState('')
-  const [geminiErr, setGeminiErr]       = useState('')
-  const [geminiKey, setGeminiKey]       = useState('')
-  const [geminiSaved, setGeminiSaved]   = useState(false)
 
   const [providers, setProviders]   = useState([])
-  const [geminiAccount, setGeminiAccount] = useState('')
   const [providerPreset, setProviderPreset] = useState('groq')
   const [provSaving, setProvSaving] = useState(false)
   const [provMsg, setProvMsg]       = useState('')
@@ -143,8 +137,6 @@ export default function Settings() {
         auto_send_email: data.auto_send_email ?? true,
       })
       // AI
-      setGeminiSaved(!!data.gemini_key)
-      setGeminiAccount(data.gemini_account || '')
       setProviders(data.ai_providers || [])
       setAnswers(data.standard_answers || {})
       // Prefs
@@ -221,23 +213,6 @@ export default function Settings() {
   }
 
   // ---------------------------------------------------------------------------
-  // Gemini save
-  async function handleGeminiSave(e) {
-    e.preventDefault()
-    setGeminiMsg(''); setGeminiErr('')
-    if (!geminiKey && !geminiSaved) { setGeminiErr('Please enter an API key.'); return }
-    setGeminiSaving(true)
-    try {
-      await updateSettings(geminiKey ? { gemini_key: geminiKey, gemini_account: geminiAccount }
-                                     : { gemini_account: geminiAccount })
-      setGeminiSaved(true)
-      setGeminiKey('')
-      setGeminiMsg('Saved!')
-      setTimeout(() => setGeminiMsg(''), 4000)
-    } catch (err) { setGeminiErr(err.message) }
-    finally { setGeminiSaving(false) }
-  }
-
   // ---------------------------------------------------------------------------
   // Extra AI providers
   const editProvider = (i, key, value) =>
@@ -250,10 +225,24 @@ export default function Settings() {
     try {
       const data = await updateSettings({ ai_providers: providers })
       setProviders(data.ai_providers || [])
-      setProvMsg('AI providers saved! They are tried in this order after the main Gemini key.')
+      setProvMsg('Keys saved! They are tried top to bottom.')
       setTimeout(() => setProvMsg(''), 5000)
     } catch (err) { setProvErr(err.message) }
     finally { setProvSaving(false) }
+  }
+
+  // Delete one key right away (unsaved rows just disappear)
+  async function handleKeyDelete(i) {
+    const row = providers[i]
+    if (!window.confirm(`Delete the key “${row.name || 'unnamed'}”?`)) return
+    const rest = providers.filter((_, j) => j !== i)
+    if (!row.id) { setProviders(rest); return }
+    setProvMsg(''); setProvErr('')
+    try {
+      const data = await updateSettings({ ai_providers: rest.filter(p => p.id) })
+      setProviders([...(data.ai_providers || []), ...rest.filter(p => !p.id)])
+      setProvMsg(`Deleted “${row.name}”.`)
+    } catch (err) { setProvErr(err.message) }
   }
 
   // Standard answers
@@ -412,84 +401,63 @@ export default function Settings() {
         </form>
       </Section>
 
-      {/* ── Gemini API Key ───────────────────────────────── */}
-      <Section title="Gemini API Key" icon="🤖">
-        {geminiMsg && <div className="alert alert-success">✅ {geminiMsg}</div>}
-        {geminiErr && <div className="alert alert-error">⚠️ {geminiErr}</div>}
-        {geminiSaved && (
-          <div className="alert alert-info" style={{ marginBottom: '0.75rem' }}>
-            🔑 A key is saved. 👁 shows it, 🧪 Test checks it against every Gemini model the app uses.
-          </div>
-        )}
-        <form onSubmit={handleGeminiSave}>
-          <div className="form-group">
-            <label className="form-label">
-              {geminiSaved ? 'Replace API Key' : 'API Key'}
-            </label>
-            <input className="form-control" aria-label="Account" style={{ maxWidth: 640, marginBottom: '0.4rem' }}
-              placeholder="Account (e.g. asif.mn.personal Gmail) — Google doesn't reveal it from the key"
-              value={geminiAccount} onChange={e => setGeminiAccount(e.target.value)} />
-            <KeyField savedId={geminiSaved ? 'gemini' : null} value={geminiKey} onChange={setGeminiKey}
-              placeholder={geminiSaved ? 'Saved — 👁 to show, or type a new key to replace' : 'AIza…'}
-              test={{ kind: 'gemini' }} style={{ maxWidth: 640 }} />
-          </div>
-          <button type="submit" className="btn btn-primary" disabled={geminiSaving}>
-            {geminiSaving ? <><Spinner size="sm" /> Saving…</> : '💾 Save Key'}
-          </button>
-        </form>
-      </Section>
-
-      {/* ── Extra AI providers ───────────────────────────── */}
-      <Section title="More AI providers" icon="🔑">
+      {/* ── AI keys ──────────────────────────────────────── */}
+      <Section title="AI keys" icon="🔑">
         <p className="form-hint" style={{ marginBottom: '0.75rem' }}>
-          Used for scoring, cover letters, emails and form answers. They are tried in order after the main
-          Gemini key; when one runs out of its free daily quota the next takes over, and your PC's local model is
-          the last resort. Any OpenAI-compatible API works (Groq, OpenRouter, OpenAI, Mistral, DeepSeek…).
-          Keys are stored encrypted; 👁 shows a saved key, 🧪 Test sends one tiny request and shows the provider's
-          answer (works before saving too).
+          Used for scoring, cover letters, emails, form answers and the AI site agent — tried top to bottom; when
+          one runs out of quota the next takes over, and your PC's local model is the last resort. 👁 shows a
+          saved key, 🧪 Test sends one tiny request and shows the provider's answer (works before saving too),
+          🗑 deletes. Keys are stored encrypted. Most providers can't tell which account a key belongs to, so put
+          it in the label.
         </p>
         {provMsg && <div className="alert alert-success">✅ {provMsg}</div>}
         {provErr && <div className="alert alert-error">⚠️ {provErr}</div>}
         <form onSubmit={handleProvidersSave}>
-          {providers.map((p, i) => (
-            <div key={p.id || `new-${i}`} className="edit-row" style={{ alignItems: 'flex-start' }}>
-              <span className="badge badge-pending" style={{ minWidth: 24 }}>{i + 1}</span>
-              <input className="form-control" aria-label="Name" placeholder="Name"
-                value={p.name} onChange={e => editProvider(i, 'name', e.target.value)} />
-              <input className="form-control" aria-label="Account" placeholder="Account (e.g. personal Gmail)"
-                value={p.account || ''} onChange={e => editProvider(i, 'account', e.target.value)} />
-              {p.kind === 'openai' && (
-                <>
-                  <input className="form-control" aria-label="Base URL" placeholder="https://…/v1"
-                    value={p.base_url} onChange={e => editProvider(i, 'base_url', e.target.value)} />
-                  <input className="form-control" aria-label="Model" placeholder="model name"
-                    value={p.model} onChange={e => editProvider(i, 'model', e.target.value)} />
-                </>
-              )}
-              <KeyField savedId={p.id} placeholder={p.id ? 'Saved — 👁 to show, or type to replace' : 'API key'}
-                value={p.key?.startsWith('…') ? '' : p.key}
-                onChange={v => editProvider(i, 'key', v)}
-                test={{ kind: p.kind, base_url: p.base_url, model: p.model }} style={{ flex: '1 1 300px' }} />
-              <button type="button" className="btn btn-danger btn-sm" aria-label={`Remove ${p.name}`}
-                onClick={() => setProviders(list => list.filter((_, j) => j !== i))}>🗑</button>
-            </div>
-          ))}
-          <div className="edit-row">
+          <ul className="key-list" aria-label="AI keys">
+            {providers.length === 0 && <li className="form-hint">No keys yet — add one below.</li>}
+            {providers.map((p, i) => (
+              <li key={p.id || `new-${i}`} className="key-row">
+                <span className="badge badge-pending key-row-n">{i + 1}</span>
+                <div className="key-row-body">
+                  <div className="key-row-line">
+                    <input className="form-control" aria-label="Label" style={{ flex: '1 1 240px' }}
+                      placeholder="Label (e.g. Gemini – personal Gmail)"
+                      value={p.name} onChange={e => editProvider(i, 'name', e.target.value)} />
+                    <span className="badge badge-info">{p.kind === 'gemini' ? 'Gemini' : 'OpenAI-compatible'}</span>
+                    {!p.id && <span className="badge badge-warning">not saved</span>}
+                    <button type="button" className="btn btn-danger btn-sm" aria-label={`Delete ${p.name}`}
+                      onClick={() => handleKeyDelete(i)}>🗑 Delete</button>
+                  </div>
+                  {p.kind === 'openai' && (
+                    <div className="key-row-line">
+                      <input className="form-control" aria-label="Base URL" placeholder="https://…/v1" style={{ flex: '1 1 240px' }}
+                        value={p.base_url} onChange={e => editProvider(i, 'base_url', e.target.value)} />
+                      <input className="form-control" aria-label="Model" placeholder="model name" style={{ flex: '1 1 240px' }}
+                        value={p.model} onChange={e => editProvider(i, 'model', e.target.value)} />
+                    </div>
+                  )}
+                  <KeyField savedId={p.id} placeholder={p.id ? 'Saved — 👁 to show, or type to replace' : 'Paste the API key'}
+                    value={p.key?.startsWith('…') ? '' : p.key}
+                    onChange={v => editProvider(i, 'key', v)}
+                    test={{ kind: p.kind, base_url: p.base_url, model: p.model }} />
+                </div>
+              </li>
+            ))}
+          </ul>
+          <div className="edit-row" style={{ marginTop: '0.75rem' }}>
             <select className="form-control" aria-label="Provider type" style={{ maxWidth: 260 }}
               value={providerPreset} onChange={e => setProviderPreset(e.target.value)}>
               {Object.entries(PROVIDER_PRESETS).map(([k, v]) => <option key={k} value={k}>{v.name}</option>)}
             </select>
             <button type="button" className="btn btn-secondary btn-sm"
               onClick={() => setProviders(list => [...list, { ...PROVIDER_PRESETS[providerPreset], key: '' }])}>
-              + Add provider
+              ➕ Add new key
+            </button>
+            <button type="submit" className="btn btn-primary btn-sm" disabled={provSaving}>
+              {provSaving ? <><Spinner size="sm" /> Saving…</> : '💾 Save keys'}
             </button>
           </div>
           <span className="form-hint">Model names change over time — check the provider's docs if one stops working.</span>
-          <div style={{ marginTop: '0.75rem' }}>
-            <button type="submit" className="btn btn-primary" disabled={provSaving}>
-              {provSaving ? <><Spinner size="sm" /> Saving…</> : '💾 Save AI providers'}
-            </button>
-          </div>
         </form>
       </Section>
 

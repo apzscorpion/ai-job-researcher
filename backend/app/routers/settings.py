@@ -48,6 +48,19 @@ class ProviderIn(BaseModel):
     key: Annotated[str, Field(max_length=500)] = ""  # empty or masked = keep the stored key for this id
 
 
+def _fold_gemini_key(s: Settings, session: Session) -> None:
+    """The old single "Gemini API Key" becomes the first row of the one AI-keys list."""
+    if not s.gemini_key_enc:
+        return
+    name = "Gemini" + (f" – {s.gemini_account}" if s.gemini_account else "")
+    rows = [{"id": "gemini-main", "kind": "gemini", "name": name, "base_url": "", "model": "",
+             "account": s.gemini_account or "", "key": crypto.decrypt(s.gemini_key_enc)}]
+    s.ai_providers_enc = crypto.encrypt(json.dumps(rows + [p for p in _providers(s) if p.get("id") != "gemini-main"]))
+    s.gemini_key_enc = s.gemini_account = None
+    session.add(s)
+    session.commit()
+
+
 def _merge_providers(s: Settings, incoming: List[ProviderIn]) -> List[Dict[str, str]]:
     """New provider list; blank keys keep the stored key of the same id."""
     stored = {p["id"]: p for p in _providers(s) if p.get("id")}
@@ -121,6 +134,7 @@ def get_settings(
     session: Session = Depends(get_session),
 ) -> Dict[str, Any]:
     s = _get_settings(current_user.id, session)
+    _fold_gemini_key(s, session)
     return _settings_to_dict(s)
 
 
@@ -168,6 +182,7 @@ def update_settings(
     session: Session = Depends(get_session),
 ) -> Dict[str, Any]:
     s = _get_settings(current_user.id, session)
+    _fold_gemini_key(s, session)  # before ai_providers is replaced, so the old key isn't lost
 
     if body.smtp_host:
         try:  # the server connects here: never to its own network
