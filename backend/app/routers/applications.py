@@ -167,7 +167,7 @@ class StatusUpdate(BaseModel):
     status: str
 
 
-VALID_STATUSES = {"queued", "draft", "applied", "needs_manual", "failed", "replied"}
+VALID_STATUSES = {"queued", "draft", "applied", "needs_manual", "failed", "replied", "skipped"}
 
 
 @router.put("/{app_id}/status")

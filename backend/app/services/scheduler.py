@@ -320,6 +320,24 @@ async def _apply_site(app, job, profile, settings, providers, email: str) -> Tup
     return status, note, url
 
 
+def _already_applied(session, user_id: int, app, job) -> Optional[str]:
+    """The same role is often listed twice (two boards, reposts): never send a second application."""
+    from sqlmodel import col, func, select
+
+    from app.models import Application, Job
+
+    same = session.exec(
+        select(Application, Job).join(Job, Job.id == Application.job_id)
+        .where(Application.user_id == user_id, Application.id != app.id,
+               col(Application.status).in_(["applied", "replied"]),
+               func.lower(Job.company) == (job.company or "").lower(),
+               func.lower(Job.title) == (job.title or "").lower())).first()
+    if same:
+        return (f"Skipped: you already applied to {job.title} at {job.company} "
+                f"on {same[0].applied_at:%d %b %Y} (the same role was listed twice).")
+    return None
+
+
 async def _apply_one(session, app, job, user_id: int, settings, profile, user_email: str,
                      route: str, now_utc: datetime) -> None:
     """Apply to one queued job and record a plain-English outcome."""
@@ -330,6 +348,12 @@ async def _apply_one(session, app, job, user_id: int, settings, profile, user_em
     providers = providers_for(settings)
     app.method = route
     sent_to: Optional[str] = None
+    dupe = _already_applied(session, user_id, app, job)
+    if dupe:
+        app.status, app.notes = "skipped", dupe
+        session.add(app)
+        session.commit()
+        return
     try:
         if route == "email":
             status, note = await _apply_email(app, job, profile, settings, providers, job.recruiter_email)

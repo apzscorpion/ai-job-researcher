@@ -189,3 +189,17 @@ def test_scraped_email_prefers_hiring_address_and_drops_trailing_dot():
     j = _job("Dev", "Acme", "u", "x", description="Questions: privacy@acme.io. Apply: jobs@acme.io.")
     assert j["recruiter_email"] == "jobs@acme.io"
     assert _job("Dev", "A", "u", "x", description="via @agcocorp.com or .external@agcocorp.com")["recruiter_email"] is None
+
+
+def test_job_board_addresses_are_not_employers():
+    for board in ("hello@remotive.com", "support@remoteok.com", "jobs@linkedin.com", "hr@mail.naukri.com"):
+        assert not usable_recruiter_email(board)
+    assert usable_recruiter_email("careers@acme.io")
+
+
+def test_best_link_ignores_job_board_mailto():
+    from app.services.site_apply import best_link
+
+    links = [("contact us", "mailto:hello@remotive.com"), ("apply for this job", "https://acme.com/careers/1")]
+    assert best_link(links) == "https://acme.com/careers/1"
+    assert best_link([("email us", "mailto:jobs@acme.io")]) == "mailto:jobs@acme.io"

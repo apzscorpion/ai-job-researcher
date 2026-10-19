@@ -82,7 +82,11 @@ async def resolve_apply_url(job: Job) -> str:
 
 def best_link(links) -> str:
     """Pick the application link from (lowercased text, absolute href) pairs: ATS or mailto first."""
-    ats_link = next((href for _, href in links if detect_ats(href) or href.startswith("mailto:")), "")
+    from app.services.mailer import usable_recruiter_email
+
+    # mailto only for a real hiring address — pages also link the job board's own inbox (hello@remotive.com)
+    ats_link = next((href for _, href in links if detect_ats(href) or (
+        href.lower().startswith("mailto:") and usable_recruiter_email(href[7:].split("?")[0]))), "")
     if ats_link:
         return ats_link
     # "Apply for this position" beats promo links that merely mention applying

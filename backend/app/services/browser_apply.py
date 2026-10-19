@@ -406,20 +406,28 @@ async def apply_linkedin(
 
         await easy_apply_btn.click()
         await random_sleep(1.5, 3.0)
+        # LinkedIn opens Easy Apply either as a dialog or as its own /apply page: wait for either
+        try:
+            await page.wait_for_function(
+                "() => document.querySelector('.jobs-easy-apply-modal, [role=dialog]') || location.pathname.includes('/apply')",
+                timeout=10_000)
+        except Exception:
+            pass
+        scope = _LI_MODAL if await page.locator(_LI_MODAL).count() > 0 else "main, body"
         extra = {"resume_path": profile.resume_path}
 
         for _step in range(12):
             if await page.locator("[data-testid='captcha'], .captcha, iframe[src*='captcha']").count() > 0:
                 return "paused", "LinkedIn showed a captcha. Paused LinkedIn for 24 hours to protect your account."
 
-            unknown = await fill_form(page, _LI_MODAL, profile, settings, extra)
+            unknown = await fill_form(page, scope, profile, settings, extra)
             if unknown:
                 return "needs_manual", (
                     "LinkedIn asked questions your résumé and standard answers don't cover: "
                     + "; ".join(f"“{q}”" for q in unknown[:5])
                     + f". Add them under Settings → Standard answers, or finish here: {job.url}")
 
-            modal = page.locator(_LI_MODAL).last
+            modal = page.locator(scope).last
             # aria-labels are steadier than the visible text LinkedIn keeps rewording
             submit_btn = modal.locator("button[aria-label*='Submit application'], button:has-text('Submit application')").first
             next_btn = modal.locator(
@@ -446,8 +454,13 @@ async def apply_linkedin(
                 await primary.click()  # an unlabeled "next" button: the dialog's main action
                 await random_sleep(1.0, 2.5)
                 continue
-            seen = await page.locator("[role=dialog] button:visible").evaluate_all(
+            seen = await modal.locator("button:visible").evaluate_all(
                 "els => els.map(e => (e.getAttribute('aria-label') || e.innerText || '').trim()).filter(Boolean).slice(0, 8)")
+            from app.config import DATA_DIR
+
+            shot = DATA_DIR / "tmp" / f"linkedin_step_job{job.id}.png"  # local only: shows what LinkedIn displayed
+            shot.parent.mkdir(parents=True, exist_ok=True)
+            await page.screenshot(path=str(shot))
             logger.warning("apply_linkedin: unknown step for job_id=%s url=%s buttons=%s", job.id, page.url, seen)
             return "needs_manual", (f"LinkedIn's form had a step we couldn't follow (buttons: {', '.join(seen) or 'none'}). "
                                     f"Finish it here: {job.url}")

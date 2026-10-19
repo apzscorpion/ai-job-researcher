@@ -44,6 +44,10 @@ _NOT_RECRUITER = re.compile(
     r"accommodations?|dpo|gdpr|press|media|billing|webmaster|postmaster)\b"
     r"|^(ethi(cs?|que)|compliance|whistle|speak-?up|integrity|fraud|investors?|hr-?benefits|benefits|payroll)", re.I)
 _NOT_RECRUITER_ANYWHERE = re.compile(r"accommodation|benefit|payroll|privacy|no-?reply|ethic|compliance", re.I)
+_JOB_BOARD_DOMAINS = ("remotive.com", "remotive.io", "remoteok.com", "remoteok.io", "linkedin.com", "naukri.com",
+                      "indeed.com", "glassdoor.com", "glassdoor.co.in", "wellfound.com", "angel.co", "foundit.in",
+                      "monster.com", "instahyre.com", "cutshort.io", "hirist.tech", "hirist.com",
+                      "weworkremotely.com", "ziprecruiter.com", "himalayas.app", "workingnomads.com")
 _PLACEHOLDER_DOMAINS = {"example.com", "email.com", "domain.com", "company.com", "yourcompany.com"}
 
 
@@ -53,8 +57,11 @@ def usable_recruiter_email(address: Optional[str]) -> bool:
     if not address or not re.fullmatch(r"\w[\w.+\-]*@[\w\-]+(\.[\w\-]+)+", address):
         return False
     local, domain = address.rsplit("@", 1)
+    domain = domain.lower()
     return (not _NOT_RECRUITER.match(local) and not _NOT_RECRUITER_ANYWHERE.search(local)
-            and domain.lower() not in _PLACEHOLDER_DOMAINS)
+            and domain not in _PLACEHOLDER_DOMAINS
+            # a job board's own address (hello@remotive.com) is not the employer's
+            and not any(domain == d or domain.endswith("." + d) for d in _JOB_BOARD_DOMAINS))
 
 
 def _context(job: Job, profile: Profile) -> str:
