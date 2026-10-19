@@ -641,7 +641,7 @@ export default function Settings() {
           their own apply, and every other site's login for company pages (e.g. RemoteOK only shows the
           employer's link to signed-in users). Your passwords are never seen or stored by this app; only the
           browser keeps you signed in, like your normal browser does. To protect your accounts, auto-apply sends
-          at most 15 LinkedIn and 10 Naukri applications a day, 8–20 minutes apart, and pauses a site as soon
+          at most 15 LinkedIn and 10 Naukri applications a day, about 1 minute apart, and pauses a site as soon
           as it shows a login page, security check or captcha.
         </p>
         <button className="btn btn-secondary btn-sm" onClick={loadBrowserStatus} disabled={syncing}

@@ -48,7 +48,7 @@ const pickable = job => !job.application_status || job.application_status === 'f
 
 const VIA_BUTTON = {
   email:    job => ({ label: '📧 Apply by email', title: `Sends your résumé + an AI cover letter from your Gmail to ${job.recruiter_email}` }),
-  linkedin: () => ({ label: '🔗 Apply on LinkedIn', title: 'LinkedIn Easy Apply (keeps the 8-minute gap and 15/day limit)' }),
+  linkedin: () => ({ label: '🔗 Apply on LinkedIn', title: 'LinkedIn Easy Apply (keeps the 1-minute gap and 15/day limit)' }),
   naukri:   () => ({ label: '🟦 Apply on Naukri', title: 'Naukri apply (keeps the gap and 10/day limit)' }),
   site:     () => ({ label: '🏢 Apply on company site', title: 'Fills the company application form; captchas or logins come to you' }),
 }
@@ -481,7 +481,7 @@ export default function Jobs() {
                   </button>
                   <span style={{ fontSize: '0.8rem', color: '#64748b' }}>
                     Showing {jobs.length} of {total} jobs. Selected jobs are sent one at a time with gaps
-                    (LinkedIn 8–20 min apart, max 15/day; Naukri max 10/day) within your apply hours.
+                    (different sites at the same time, about 1 min apart on the same site; LinkedIn max 15/day, Naukri 10/day) within your apply hours.
                   </span>
                 </div>
                 <div className="jobs-grid">

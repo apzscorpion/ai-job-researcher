@@ -17,7 +17,6 @@ from urllib.parse import urljoin, urlparse
 
 import httpx
 
-from app.config import DATA_DIR
 from app.models import Job, Profile, Settings
 from app.services.browser_apply import fill_form, random_sleep
 
@@ -105,10 +104,13 @@ async def apply_company_site(
     submit: bool = True,
 ) -> Tuple[str, str, str]:
     """Visit the company's application page, fill it and submit. Returns (status, note, url)."""
-    from app.services.connections import site_browser
+    from app.services.connections import fresh_browser, site_browser
 
     url = await resolve_apply_url(job)
-    async with site_browser(job.user_id) as context:  # the user's job-site logins (Settings → Job sites)
+    # Company pages need no login: a fresh browser each, so different sites apply in parallel.
+    # Finding the link on a board (RemoteOK, Indeed…) needs the user's board login: the shared signed-in browser.
+    browser = fresh_browser() if url else site_browser(job.user_id)
+    async with browser as context:
         page = await context.new_page()
         if not url and job.source not in ("linkedin", "naukri") and job.url.startswith("http"):
             # Some boards (RemoteOK, Indeed…) show the employer's link only to signed-in visitors
@@ -125,26 +127,42 @@ async def apply_company_site(
         if url.startswith("mailto:"):
             return "email", "The posting asks for applications by email.", url[7:].split("?")[0]
         if not url:
-            board = urlparse(job.url).netloc.replace("www.", "")
-            return "needs_manual", (f"{board} didn't show {job.company}'s own application link — it usually "
-                                    f"needs you signed in there: connect it in Settings → Job sites and click "
-                                    f"Apply again, or apply from the posting: {job.url}"), job.url
+            # No link to follow: let the AI agent read the posting and find how to apply
+            from app.services.agent_apply import agent_apply
+
+            status, note = await agent_apply(
+                page, job, profile, settings, "Find how to apply for this job from this posting, follow it and "
+                "complete the application.", cover_letter, _cover_file(job, profile, cover_letter), email)
+            return status, note, page.url
         host = urlparse(url).netloc.lower()
         if any(s in host for s in ACCOUNT_SITES):
             return "needs_manual", (f"{job.company} uses {host}, which needs an account there. "
                                     f"Apply here with the cover letter below: {url}"), url
-        return await _fill_and_submit(page, job, profile, settings, cover_letter, email, submit, url)
+        status, note, where = await _fill_and_submit(page, job, profile, settings, cover_letter, email, submit, url)
+        if status == "needs_manual" and submit and not re.search(r"captcha|needs an account", note, re.I):
+            # The fixed form filler got stuck (modal, multi-step, chat widget…): the AI agent takes over
+            from app.services.agent_apply import agent_apply
+
+            status, note = await agent_apply(page, job, profile, settings,
+                                             "Submit an application for this job on this site.", cover_letter,
+                                             _cover_file(job, profile, cover_letter), email)
+            where = page.url
+        return status, note, where
+
+
+def _cover_file(job: Job, profile: Profile, cover_letter: str) -> str:
+    """The formal Word cover letter for upload fields ("" when there is none)."""
+    from app.services.mailer import cover_letter_docx
+
+    return cover_letter_docx(cover_letter, job, profile) if cover_letter else ""
 
 
 async def _fill_and_submit(page, job: Job, profile: Profile, settings: Settings, cover_letter: str,
                            email: str, submit: bool, url: str) -> Tuple[str, str, str]:
     ats = detect_ats(url)
     host = urlparse(url).netloc.lower()
-    cover_path = DATA_DIR / "tmp" / f"cover_letter_{job.id}.txt"
-    cover_path.parent.mkdir(parents=True, exist_ok=True)
-    cover_path.write_text(cover_letter or "", encoding="utf-8")
     extra = {"email": email, "resume_path": profile.resume_path, "cover_letter": cover_letter,
-             "cover_letter_path": str(cover_path) if cover_letter else ""}
+             "cover_letter_path": _cover_file(job, profile, cover_letter)}
     where = f"{job.company}'s {ats.title() if ats else host} page"
 
     try:

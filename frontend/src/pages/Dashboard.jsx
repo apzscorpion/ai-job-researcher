@@ -61,7 +61,7 @@ function AutoApplyStatus({ r, onSettings }) {
           <Check key={p} ok={!paused[p]}>
             {p === 'linkedin' ? 'LinkedIn Easy Apply' : 'Naukri'}: {paused[p]
               ? <strong>paused — {paused[p]}</strong>
-              : `up to ${r.platform_daily_cap?.[p]} a day, 8–20 min apart (pauses itself on login walls or captchas)`}
+              : `up to ${r.platform_daily_cap?.[p]} a day, about 1 min apart (pauses itself on login walls or captchas)`}
           </Check>
         ))}
         <Check ok>Company sites (Greenhouse, Lever, Ashby, Workable and plain forms): visited, filled, résumé + AI cover letter uploaded, submitted only when every required question is answered.</Check>

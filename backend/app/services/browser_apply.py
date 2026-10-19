@@ -370,6 +370,34 @@ async def _linkedin_logged_in(page) -> bool:
     return await _signed_in(page, "li_at", ("/login", "/authwall", "/uas/", "/signup"))
 
 
+async def _follow_external(page, button, job: Job) -> bool:
+    """Click the site's "Apply on company site" in the signed-in session and keep the company's URL.
+
+    Only the signed-in page knows the link; job.apply_url is saved with the application.
+    """
+    url = ""
+    try:
+        async with page.context.expect_page(timeout=12_000) as info:
+            await button.click()
+        new = await info.value
+        await new.wait_for_load_state("domcontentloaded")
+        url = new.url
+        await new.close()
+    except Exception:
+        await page.wait_for_timeout(3000)  # some open the company page in the same tab
+        url = page.url
+    if url.startswith("http") and not re.search(r"linkedin\.com|naukri\.com", url):
+        job.apply_url = url
+        return True
+    return False
+
+
+async def _agent_finish(page, job: Job, profile: Profile, settings: Settings, goal: str) -> Tuple[str, str]:
+    from app.services.agent_apply import agent_apply
+
+    return await agent_apply(page, job, profile, settings, goal, email=settings.smtp_from or "")
+
+
 async def apply_linkedin(
     job: Job,
     profile: Profile,
@@ -398,8 +426,11 @@ async def apply_linkedin(
 
         easy_apply_btn = page.locator("button.jobs-apply-button:has-text('Easy Apply'), button:has-text('Easy Apply')").first
         if await easy_apply_btn.count() == 0:
-            if await page.locator("button.jobs-apply-button, button:has-text('Apply')").count() > 0:
-                return "external", "Not an Easy Apply job — LinkedIn sends applicants to the company's own site."
+            apply_btn = page.locator("button.jobs-apply-button, a.jobs-apply-button, button:has-text('Apply')").first
+            if await apply_btn.count() > 0:
+                found = await _follow_external(page, apply_btn, job)
+                return "external", ("Not an Easy Apply job — LinkedIn sends applicants to the company's own site"
+                                    + (f" ({job.apply_url.split('/')[2]})." if found else "."))
             if await page.locator(":text('No longer accepting applications')").count() > 0:
                 return "needs_manual", "This job is no longer accepting applications."
             return "needs_manual", f"No Apply button found on LinkedIn. Check the job here: {job.url}"
@@ -421,11 +452,9 @@ async def apply_linkedin(
                 return "paused", "LinkedIn showed a captcha. Paused LinkedIn for 24 hours to protect your account."
 
             unknown = await fill_form(page, scope, profile, settings, extra)
-            if unknown:
-                return "needs_manual", (
-                    "LinkedIn asked questions your résumé and standard answers don't cover: "
-                    + "; ".join(f"“{q}”" for q in unknown[:5])
-                    + f". Add them under Settings → Standard answers, or finish here: {job.url}")
+            if unknown:  # questions the fixed filler couldn't answer: the AI agent finishes the form
+                return await _agent_finish(page, job, profile, settings,
+                                           "Complete and submit this LinkedIn Easy Apply application.")
 
             modal = page.locator(scope).last
             # aria-labels are steadier than the visible text LinkedIn keeps rewording
@@ -462,10 +491,11 @@ async def apply_linkedin(
             shot.parent.mkdir(parents=True, exist_ok=True)
             await page.screenshot(path=str(shot))
             logger.warning("apply_linkedin: unknown step for job_id=%s url=%s buttons=%s", job.id, page.url, seen)
-            return "needs_manual", (f"LinkedIn's form had a step we couldn't follow (buttons: {', '.join(seen) or 'none'}). "
-                                    f"Finish it here: {job.url}")
+            return await _agent_finish(page, job, profile, settings,
+                                       "Complete and submit this LinkedIn Easy Apply application.")
 
-        return "needs_manual", f"LinkedIn's form had too many steps. Finish it here: {job.url}"
+        return await _agent_finish(page, job, profile, settings,
+                                   "Complete and submit this LinkedIn Easy Apply application.")
 
     except Exception:
         logger.exception("apply_linkedin: error for job_id=%s", job.id)
@@ -508,8 +538,11 @@ async def apply_naukri(
 
         await _read_like_a_person(page)
 
-        if await page.locator("button:has-text('Apply on company site')").count() > 0:
-            return "external", "Naukri sends applicants to the company's own site."
+        company_btn = page.locator("button:has-text('Apply on company site')").first
+        if await company_btn.count() > 0:
+            found = await _follow_external(page, company_btn, job)
+            return "external", ("Naukri sends applicants to the company's own site"
+                                + (f" ({job.apply_url.split('/')[2]})." if found else "."))
         apply_btn = page.locator("button:has-text('Apply'), a:has-text('Apply Now')").first
         if await apply_btn.count() == 0:
             if await page.locator(":text('Applied')").count() > 0:
@@ -533,9 +566,9 @@ async def apply_naukri(
                 break
             q_text = (await question.inner_text()).strip()
             answer = await answer_question(q_text, profile, settings)
-            if not answer:
-                return "needs_manual", (f"Naukri asked “{q_text}”, which your résumé and standard answers don't "
-                                        f"cover. Add it under Settings → Standard answers, or finish here: {job.url}")
+            if not answer:  # unreadable or unusual question: the AI agent answers in the chat itself
+                return await _agent_finish(page, job, profile, settings,
+                                           "Complete this Naukri application, answering the chatbot's screening questions.")
             await answer_input.press_sequentially(answer[:150], delay=random.randint(50, 150))
             send = page.locator(".sendMsg, button:has-text('Save'), button:has-text('Submit')").first
             if await send.count() > 0:
@@ -543,7 +576,8 @@ async def apply_naukri(
 
         if await page.locator(":text('successfully applied'), :text('Applied successfully'), .confirmation").count() > 0:
             return "applied", "Applied on Naukri with your Naukri profile and résumé."
-        return "needs_manual", f"Naukri didn't confirm the application. Check it here: {job.url}"
+        return await _agent_finish(page, job, profile, settings,
+                                   "Complete this Naukri application, answering the chatbot's screening questions.")
 
     except Exception:
         logger.exception("apply_naukri: error for job_id=%s", job.id)

@@ -22,7 +22,7 @@ export default function WaitingBanner() {
     try {
       await connectJobSite(site)
       setMsg(`A ${NAMES[site] || site} window is opening on this computer — log in there. It closes by itself ` +
-             'once you are in, and the waiting jobs start going out (one every 8–20 minutes).')
+             'once you are in, and the waiting jobs start going out (about one a minute per site).')
     } catch (err) { setMsg(err.message) }
   }
 

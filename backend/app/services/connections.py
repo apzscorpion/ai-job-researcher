@@ -164,6 +164,27 @@ async def _block_private(route) -> None:
 
 
 @asynccontextmanager
+async def fresh_browser():
+    """A clean Chrome window (no saved logins) for company application pages; many can run at once."""
+    from playwright.async_api import async_playwright  # type: ignore
+
+    args = ["--disable-blink-features=AutomationControlled", "--window-position=-32000,-32000",
+            "--window-size=1366,900"]
+    async with async_playwright() as p:
+        try:
+            browser = await p.chromium.launch(channel="chrome", headless=False, args=args,
+                                              ignore_default_args=["--enable-automation"])
+        except Exception:
+            browser = await p.chromium.launch(headless=False, args=args, ignore_default_args=["--enable-automation"])
+        context = await browser.new_context(no_viewport=True)
+        await context.route("**/*", _block_private)
+        try:
+            yield context
+        finally:
+            await browser.close()
+
+
+@asynccontextmanager
 async def site_browser(user_id: int):
     """Headless browser on the shared "sites" profile, so the user's job-site logins apply."""
     from playwright.async_api import async_playwright  # type: ignore

@@ -165,7 +165,7 @@ async def _alert_user(settings, user_id: int, subject: str, body: str) -> None:
 # Far below the volumes that get accounts restricted; spread through the day by the gap below
 PLATFORM_DAILY_CAP = {"linkedin": 15, "naukri": 10}
 # Random wait between two applications on the same site (seconds)
-PLATFORM_GAP_S = (8 * 60, 20 * 60)
+PLATFORM_GAP_S = (60, 75)  # the user asked for ~1 minute between applications on one platform
 
 
 def active_pauses(raw: Optional[str], now_utc: datetime) -> Dict[str, str]:
@@ -399,8 +399,10 @@ async def _apply_one(session, app, job, user_id: int, settings, profile, user_em
 
 
 async def _process_apply_queue() -> None:
-    """Apply to at most one queued job per user per run, respecting pacing and account safety."""
+    """Start queued applications: several platforms in parallel, one at a time per platform."""
+    import asyncio
     import random
+    import time
 
     from sqlmodel import Session, col, func, select
     from app.db import engine
@@ -440,10 +442,11 @@ async def _process_apply_queue() -> None:
                 ts = session.exec(select(func.max(Application.applied_at)).where(*attempted, *conds)).one()
                 return ts.replace(tzinfo=timezone.utc) if ts else None
 
+            applied_today = applied_since(col(Application.applied_at) >= day_start)  # in-flight ones count too
             if not can_apply(
-                applied_today=applied_since(col(Application.applied_at) >= day_start),
+                applied_today=applied_today,
                 cap=settings.daily_cap,
-                last_apply_ts=last_attempt(),
+                last_apply_ts=None,  # gaps are per platform (below), not across all channels
                 now=now_utc.astimezone(tz),
                 start_hour=settings.apply_start_hour,
                 end_hour=settings.apply_end_hour,
@@ -451,19 +454,53 @@ async def _process_apply_queue() -> None:
                 continue
 
             paused = active_pauses(settings.platform_pauses, now_utc)
-            gap = random.uniform(*PLATFORM_GAP_S)
+            busy = {_group(j, a.method) for a, j in session.exec(
+                select(Application, Job).join(Job, Application.job_id == Job.id)
+                .where(Application.user_id == user_id, Application.status == "applying")).all()}
+            chosen = []
             for app, job in items:
+                if len(chosen) >= min(_MAX_PARALLEL, settings.daily_cap - applied_today):
+                    break
                 route = route_for(job)
+                group = _group(job, route)
+                if group in busy or time.monotonic() - _group_done.get((user_id, group), -1e9) < random.uniform(*PLATFORM_GAP_S):
+                    continue  # this platform is busy or had an application under a minute ago
                 if route in PLATFORM_DAILY_CAP and not platform_ready(
                     route, paused,
                     applied_since(Application.method == route, col(Application.applied_at) >= day_start),
-                    last_attempt(Application.method == route), now_utc, gap,
+                    None, now_utc, 0,
                 ):
-                    continue  # try the next job; this site waits
-                user = session.get(User, user_id)
-                email = settings.smtp_from or (user.email if user else "")
-                await _apply_one(session, app, job, user_id, settings, profile, email, route, now_utc)
-                break
+                    continue  # paused or at its daily cap; other platforms still go
+                busy.add(group)
+                chosen.append((app, route, group))
+
+            for app, route, _group_key in chosen:
+                app.status, app.method, app.notes = "applying", route, "Applying now…"
+                app.applied_at = now_utc.replace(tzinfo=None)
+                session.add(app)
+            session.commit()
+            # Different platforms apply at the same time, each in its own browser and DB session
+            for app, route, group in chosen:
+                task = asyncio.create_task(apply_now(app.id, route))
+                _tasks.add(task)
+                task.add_done_callback(_tasks.discard)
+                task.add_done_callback(lambda _t, k=(user_id, group): _group_done.__setitem__(k, time.monotonic()))
+            if chosen:
+                logger.info("scheduler: user_id=%s started %s", user_id, [(a.id, g) for a, _r, g in chosen])
+
+
+def _group(job, route: str) -> str:
+    """Platform an application runs on; one at a time per platform, different platforms in parallel."""
+    from urllib.parse import urlparse
+
+    if route != "site":
+        return route
+    return "site:" + urlparse(job.apply_url or job.url or "").netloc.lower().removeprefix("www.")
+
+
+_MAX_PARALLEL = 4                       # browsers / AI agents running at once per user
+_group_done: Dict[tuple, float] = {}    # (user_id, platform) -> when its last application finished
+_tasks: set = set()                     # keeps running applications from being garbage-collected
 
 
 # ---------------------------------------------------------------------------
@@ -502,7 +539,7 @@ def start_scheduler() -> None:
 
         _scheduler.add_job(
             _process_apply_queue,
-            trigger=IntervalTrigger(minutes=2),  # email/site every ~2 min; LinkedIn/Naukri keep their own gaps
+            trigger=IntervalTrigger(minutes=1),  # each platform waits ~1 min between its applications
             id="apply_job",
             name="Apply queue processor",
             replace_existing=True,
