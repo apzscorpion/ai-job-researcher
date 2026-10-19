@@ -81,6 +81,7 @@ export default function Settings() {
   const [geminiSaved, setGeminiSaved]   = useState(false)
 
   const [providers, setProviders]   = useState([])
+  const [geminiAccount, setGeminiAccount] = useState('')
   const [providerPreset, setProviderPreset] = useState('groq')
   const [provSaving, setProvSaving] = useState(false)
   const [provMsg, setProvMsg]       = useState('')
@@ -143,6 +144,7 @@ export default function Settings() {
       })
       // AI
       setGeminiSaved(!!data.gemini_key)
+      setGeminiAccount(data.gemini_account || '')
       setProviders(data.ai_providers || [])
       setAnswers(data.standard_answers || {})
       // Prefs
@@ -223,13 +225,14 @@ export default function Settings() {
   async function handleGeminiSave(e) {
     e.preventDefault()
     setGeminiMsg(''); setGeminiErr('')
-    if (!geminiKey) { setGeminiErr('Please enter an API key.'); return }
+    if (!geminiKey && !geminiSaved) { setGeminiErr('Please enter an API key.'); return }
     setGeminiSaving(true)
     try {
-      await updateSettings({ gemini_key: geminiKey })
+      await updateSettings(geminiKey ? { gemini_key: geminiKey, gemini_account: geminiAccount }
+                                     : { gemini_account: geminiAccount })
       setGeminiSaved(true)
       setGeminiKey('')
-      setGeminiMsg('API key saved!')
+      setGeminiMsg('Saved!')
       setTimeout(() => setGeminiMsg(''), 4000)
     } catch (err) { setGeminiErr(err.message) }
     finally { setGeminiSaving(false) }
@@ -423,6 +426,9 @@ export default function Settings() {
             <label className="form-label">
               {geminiSaved ? 'Replace API Key' : 'API Key'}
             </label>
+            <input className="form-control" aria-label="Account" style={{ maxWidth: 640, marginBottom: '0.4rem' }}
+              placeholder="Account (e.g. asif.mn.personal Gmail) — Google doesn't reveal it from the key"
+              value={geminiAccount} onChange={e => setGeminiAccount(e.target.value)} />
             <KeyField savedId={geminiSaved ? 'gemini' : null} value={geminiKey} onChange={setGeminiKey}
               placeholder={geminiSaved ? 'Saved — 👁 to show, or type a new key to replace' : 'AIza…'}
               test={{ kind: 'gemini' }} style={{ maxWidth: 640 }} />
@@ -450,6 +456,8 @@ export default function Settings() {
               <span className="badge badge-pending" style={{ minWidth: 24 }}>{i + 1}</span>
               <input className="form-control" aria-label="Name" placeholder="Name"
                 value={p.name} onChange={e => editProvider(i, 'name', e.target.value)} />
+              <input className="form-control" aria-label="Account" placeholder="Account (e.g. personal Gmail)"
+                value={p.account || ''} onChange={e => editProvider(i, 'account', e.target.value)} />
               {p.kind === 'openai' && (
                 <>
                   <input className="form-control" aria-label="Base URL" placeholder="https://…/v1"

@@ -290,6 +290,26 @@ async def test_provider(p: Dict[str, str]) -> List[Dict[str, Any]]:
         return [{"model": model, "ok": False, "status": None, "error": f"couldn't reach the provider: {str(exc)[:300]}"}]
 
 
+async def key_info(p: Dict[str, str]) -> Optional[Dict[str, Any]]:
+    """What the provider itself says about a key, where it says anything (OpenRouter only so far).
+
+    Gemini / OpenAI-style keys have no endpoint naming the account behind them.
+    """
+    if "openrouter.ai" not in (p.get("base_url") or ""):
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.get("https://openrouter.ai/api/v1/key", headers={"Authorization": f"Bearer {p['key']}"})
+        data = resp.json().get("data") or {}
+    except (httpx.HTTPError, ValueError):
+        return None
+    if not data:
+        return None
+    return {"label": data.get("label"), "free_tier": data.get("is_free_tier"),
+            "usage_usd": data.get("usage"), "limit_usd": data.get("limit"),
+            "limit_remaining_usd": data.get("limit_remaining")}
+
+
 async def gemini_search(query: str, api_key: str) -> str:
     """Use Gemini with Google Search grounding to answer a query; "" on failure."""
     from google.genai import types  # type: ignore

@@ -43,6 +43,13 @@ export default function KeyField({ savedId, value, onChange, placeholder, test, 
         </button>
       </div>
       {error && <div className="key-test key-test-bad">⚠️ {error}</div>}
+      {result?.account && (
+        <div className="key-test" style={{ color: '#334155' }}>
+          ℹ️ {result.account.label ? <>Key name <strong>{result.account.label}</strong> · </> : null}
+          {result.account.free_tier ? 'free tier' : 'paid account'} · used ${Number(result.account.usage_usd || 0).toFixed(4)}
+          {result.account.limit_usd != null && ` of $${result.account.limit_usd} limit`}
+        </div>
+      )}
       {result && (
         <ul className="key-test" aria-label="Test results">
           {result.results.map(r => (

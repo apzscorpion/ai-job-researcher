@@ -44,6 +44,7 @@ class ProviderIn(BaseModel):
     name: Short = ""
     base_url: Short = ""
     model: Short = ""
+    account: Short = ""  # which account the key belongs to (the user's label; APIs don't tell)
     key: Annotated[str, Field(max_length=500)] = ""  # empty or masked = keep the stored key for this id
 
 
@@ -67,7 +68,8 @@ def _merge_providers(s: Settings, incoming: List[ProviderIn]) -> List[Dict[str, 
         if not key:
             raise HTTPException(status_code=422, detail=f"API key is required for {p.name or p.kind}")
         merged.append({"id": pid, "kind": p.kind, "name": p.name.strip() or p.kind.title(),
-                       "base_url": p.base_url.strip(), "model": p.model.strip(), "key": key})
+                       "base_url": p.base_url.strip(), "model": p.model.strip(),
+                       "account": p.account.strip(), "key": key})
     return merged
 
 
@@ -82,6 +84,7 @@ def _settings_to_dict(s: Settings) -> Dict[str, Any]:
         "smtp_from": s.smtp_from,
         "smtp_tls": s.smtp_tls,
         "gemini_key": "***" if s.gemini_key_enc else "",
+        "gemini_account": s.gemini_account or "",
         "ai_providers": [{**{k: v for k, v in p.items() if k != "key"}, "key": f"…{p.get('key', '')[-4:]}"}
                          for p in _providers(s)],
         "standard_answers": json_decode(s.standard_answers, {}) or {},
@@ -133,6 +136,7 @@ class SettingsUpdate(BaseModel):
     smtp_from: Optional[Short] = None
     smtp_tls: Optional[bool] = None
     gemini_key: Optional[Annotated[str, Field(max_length=500)]] = None      # plain text; will be encrypted
+    gemini_account: Optional[Short] = None
     ai_providers: Optional[Annotated[List[ProviderIn], Field(max_length=10)]] = None
     standard_answers: Optional[Annotated[Dict[Short, Long], Field(max_length=50)]] = None
     auto_send_email: Optional[bool] = None
@@ -182,6 +186,8 @@ def update_settings(
         s.smtp_tls = body.smtp_tls
     if body.smtp_password is not None:
         s.smtp_password_enc = crypto.encrypt(body.smtp_password) if body.smtp_password else None
+    if body.gemini_account is not None:
+        s.gemini_account = body.gemini_account.strip() or None
     if body.gemini_key is not None:
         s.gemini_key_enc = crypto.encrypt(body.gemini_key) if body.gemini_key else None
     if body.ai_providers is not None:
@@ -312,9 +318,11 @@ async def test_key(
             check_public_url(body.base_url.strip(), ("https",))
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=f"Base URL: {exc}")
-    results = await test_provider({"kind": body.kind, "key": key, "base_url": body.base_url.strip(),
-                                   "model": body.model.strip()})
-    return {"ok": any(r["ok"] for r in results), "results": results}
+    p = {"kind": body.kind, "key": key, "base_url": body.base_url.strip(), "model": body.model.strip()}
+    results = await test_provider(p)
+    from app.services.llm import key_info
+
+    return {"ok": any(r["ok"] for r in results), "results": results, "account": await key_info(p)}
 
 
 # ---------------------------------------------------------------------------

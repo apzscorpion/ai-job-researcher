@@ -107,6 +107,7 @@ class Settings(SQLModel, table=True):
 
     # Gemini
     gemini_key_enc: Optional[str] = None  # Fernet-encrypted
+    gemini_account: Optional[str] = None  # the user's own note of which Google account the key belongs to
     # Extra AI providers, Fernet-encrypted JSON list of
     # {"id", "kind": "gemini"|"openai", "name", "key", "base_url", "model"}; tried after gemini_key
     ai_providers_enc: Optional[str] = None
