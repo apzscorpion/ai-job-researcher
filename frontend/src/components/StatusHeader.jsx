@@ -65,9 +65,10 @@ export default function StatusHeader() {
           ? <Chip tone="bad" title="Every cloud provider is out of quota; the local model is used (slow)">
               🤖 All AI out of quota ({aiOut.map(p => `${p.name} ~${hours(Math.min(...p.blocked.map(b => b.minutes)))}`).join(', ')}) — using the slow local model
             </Chip>
-          : ai.map(p => (
-              <Chip key={p.name} tone={p.out ? 'bad' : p.blocked.length ? 'warn' : 'ok'}
-                title={p.blocked.map(b => `${b.model}: ${b.why}, back in ~${hours(b.minutes)}`).join('\n') || 'Available'}>
+          : ai.map((p, i) => (
+              <Chip key={`${p.name}-${i}`} tone={p.out ? 'bad' : p.blocked.length ? 'warn' : 'ok'}
+                title={[p.label && `Key: ${p.label}`, ...p.blocked.map(b => `${b.model}: ${b.why}, back in ~${hours(b.minutes)}`)]
+                  .filter(Boolean).join('\n') || 'Available'}>
                 🤖 {p.name}: {p.out
                   ? `out of quota (back in ~${hours(Math.min(...p.blocked.map(b => b.minutes)))})`
                   : p.blocked.length ? `${p.models - p.blocked.length}/${p.models} models available` : 'OK'}

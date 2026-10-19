@@ -107,6 +107,20 @@ def _block(api_key: str, model: str, seconds: float, why: str) -> None:
     logger.warning("AI %s (key …%s) %s — skipping it for %.1f h", model, api_key[-4:], why, seconds / 3600)
 
 
+_HOST_NAMES = {"openrouter.ai": "OpenRouter", "groq.com": "Groq", "openai.com": "OpenAI", "mistral.ai": "Mistral",
+               "deepseek.com": "DeepSeek", "together.xyz": "Together", "fireworks.ai": "Fireworks"}
+
+
+def _provider_name(p: Dict[str, str]) -> str:
+    """What the provider is ("Gemini", "OpenRouter · gemma"), not the user's label for the key."""
+    if p.get("kind") == "gemini":
+        return "Gemini"
+    host = (p.get("base_url") or "").split("/")[2] if "//" in (p.get("base_url") or "") else ""
+    name = next((v for k, v in _HOST_NAMES.items() if host.endswith(k)), host or "AI")
+    model = (p.get("model") or "").split("/")[-1].split(":")[0].split("-")[0]
+    return f"{name} · {model}" if model else name
+
+
 def quota_status(settings: Any) -> List[Dict[str, Any]]:
     """Per AI provider: which models are skipped right now, why, and for how many more minutes."""
     now = time.monotonic()
@@ -116,7 +130,7 @@ def quota_status(settings: Any) -> List[Dict[str, Any]]:
         blocked = [{"model": m, "why": _block_why.get(_slot(p["key"], m), ""),
                     "minutes": int((_blocked[_slot(p["key"], m)] - now) // 60) + 1}
                    for m in models if _blocked.get(_slot(p["key"], m), 0.0) > now]
-        out.append({"name": p.get("name") or p.get("kind", "AI").title(), "models": len(models),
+        out.append({"name": _provider_name(p), "label": p.get("name") or "", "models": len(models),
                     "blocked": blocked, "out": len(blocked) == len(models)})
     return out
 
