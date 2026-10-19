@@ -1018,3 +1018,33 @@ input[type="range"] {
   margin-bottom: 0.75rem;
   font-size: 0.85rem;
 }
+
+.status-header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+.status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.78rem;
+  padding: 0.25rem 0.6rem;
+  border-radius: 999px;
+  border: 1px solid transparent;
+}
+.status-ok   { background: #f0fdf4; color: #166534; border-color: #bbf7d0; }
+.status-warn { background: #fffbeb; color: #92400e; border-color: #fde68a; }
+.status-bad  { background: #fef2f2; color: #991b1b; border-color: #fecaca; }
+.status-chip-btn {
+  font-size: 0.72rem;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  background: #fff;
+  color: inherit;
+  cursor: pointer;
+}
+.status-msg { font-size: 0.8rem; color: #475569; }

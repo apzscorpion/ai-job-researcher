@@ -203,3 +203,24 @@ def test_best_link_ignores_job_board_mailto():
     links = [("contact us", "mailto:hello@remotive.com"), ("apply for this job", "https://acme.com/careers/1")]
     assert best_link(links) == "https://acme.com/careers/1"
     assert best_link([("email us", "mailto:jobs@acme.io")]) == "mailto:jobs@acme.io"
+
+
+def test_restriction_and_limit_messages():
+    from app.services.browser_apply import _LIMIT, _RESTRICTED
+
+    assert _RESTRICTED.search("Your account has been temporarily restricted")
+    assert _RESTRICTED.search("We've restricted your account")
+    assert _LIMIT.search("You've reached today's Easy Apply limit")
+    assert _LIMIT.search("Daily apply limit reached")
+    assert not _RESTRICTED.search("Senior Engineer — restricted stock units offered") and not _LIMIT.search("No limits!")
+
+
+def test_quota_status_reports_blocked_models(monkeypatch):
+    from app.services import llm
+
+    monkeypatch.setattr(llm, "providers_for", lambda s: [{"kind": "openai", "name": "OpenRouter", "key": "k-123456", "model": "m1"}])
+    monkeypatch.setattr(llm, "_blocked", {})
+    assert llm.quota_status(None)[0]["out"] is False
+    llm._block("k-123456", "m1", 3600, "rate-limited")
+    status = llm.quota_status(None)[0]
+    assert status["out"] and status["blocked"][0]["why"] == "rate-limited" and 59 <= status["blocked"][0]["minutes"] <= 61

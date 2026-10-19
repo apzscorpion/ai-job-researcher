@@ -182,7 +182,8 @@ def pause_platform(settings, platform: str, reason: str, now_utc: datetime) -> N
     from app.models import json_decode
 
     pauses = json_decode(settings.platform_pauses, {}) or {}
-    days = 30 if ("logged out" in reason or "security check" in reason) else 1
+    # restricted / logged out / security check: until the user reconnects; captcha or the site's limit: a day
+    days = 30 if re.search(r"logged out|security check|restricted", reason) else 1
     until = now_utc.replace(tzinfo=None) + timedelta(days=days)
     pauses[platform] = {"until": until.isoformat(), "reason": reason}
     settings.platform_pauses = json.dumps(pauses)

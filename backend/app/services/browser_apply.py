@@ -370,6 +370,29 @@ async def _linkedin_logged_in(page) -> bool:
     return await _signed_in(page, "li_at", ("/login", "/authwall", "/uas/", "/signup"))
 
 
+_RESTRICTED = re.compile(
+    r"account (has been |is |was )?(temporarily )?(restricted|suspended|blocked|locked)|we('ve| have) "
+    r"(temporarily )?restricted|unusual activity (from|on) your account", re.I)
+_LIMIT = re.compile(
+    r"reached (the |today'?s |your )?(daily |weekly |easy apply )?(application |apply )?limit|"
+    r"(daily|application|apply) limit (reached|exceeded)|limit (on|for) (daily )?(applications|submissions)|"
+    r"maximum (number of )?(daily )?applications", re.I)
+
+
+async def _account_block(page, site: str) -> Optional[str]:
+    """A "paused" note when the site restricts the account or hits its own apply limit; else None."""
+    try:
+        text = await page.locator("body").inner_text(timeout=5_000)
+    except Exception:
+        return None
+    if _RESTRICTED.search(text):
+        return (f"{site} has restricted your account — auto-apply stopped there. Resolve it on {site.lower()}.com "
+                f"in your own browser, then reconnect in Settings → Job sites.")
+    if _LIMIT.search(text):
+        return f"{site} says you've reached its application limit for now — {site} resumes tomorrow."
+    return None
+
+
 async def _follow_external(page, button, job: Job) -> bool:
     """Click the site's "Apply on company site" in the signed-in session and keep the company's URL.
 
@@ -421,6 +444,9 @@ async def apply_linkedin(
                               "complete it, then reconnect in Settings → Job sites.")
         if not await _linkedin_logged_in(page):
             return "paused", "LinkedIn is logged out. Reconnect it in Settings → Job sites."
+        blocked = await _account_block(page, "LinkedIn")
+        if blocked:
+            return "paused", blocked
 
         await _read_like_a_person(page)
 
@@ -437,6 +463,9 @@ async def apply_linkedin(
 
         await easy_apply_btn.click()
         await random_sleep(1.5, 3.0)
+        blocked = await _account_block(page, "LinkedIn")  # "you've reached the Easy Apply limit" shows here
+        if blocked:
+            return "paused", blocked
         # LinkedIn opens Easy Apply either as a dialog or as its own /apply page: wait for either
         try:
             await page.wait_for_function(
@@ -535,6 +564,9 @@ async def apply_naukri(
         if (not await _signed_in(page, "nauk_rt", ("nlogin", "/login"))
                 or await page.locator("button:has-text('Login to apply'), button:has-text('Register to apply')").count() > 0):
             return "paused", "Naukri is logged out. Reconnect it in Settings → Job sites."
+        blocked = await _account_block(page, "Naukri")
+        if blocked:
+            return "paused", blocked
 
         await _read_like_a_person(page)
 
@@ -552,6 +584,9 @@ async def apply_naukri(
 
         await apply_btn.click()
         await random_sleep(1.5, 3.0)
+        blocked = await _account_block(page, "Naukri")
+        if blocked:
+            return "paused", blocked
 
         if await page.locator(".captchaContainer, #captcha").count() > 0:
             return "paused", "Naukri showed a captcha. Paused Naukri for 24 hours to protect your account."

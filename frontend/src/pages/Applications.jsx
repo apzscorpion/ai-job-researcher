@@ -1,4 +1,3 @@
-import WaitingBanner from '../components/WaitingBanner'
 import Pagination from '../components/Pagination'
 import React, { useState, useEffect, useCallback } from 'react'
 import { getApplications, updateApplicationStatus, sendApplicationEmail, cancelApplication, retryAllApplications } from '../api'
@@ -236,7 +235,6 @@ export default function Applications() {
         </div>
       </div>
 
-      <WaitingBanner />
 
       {/* ── Filters ──────────────────────────────────────── */}
       <div className="filters-bar">

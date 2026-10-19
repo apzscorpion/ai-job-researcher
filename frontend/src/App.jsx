@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
 
 import Sidebar from './components/Sidebar'
+import StatusHeader from './components/StatusHeader'
 import LogViewer from './components/LogViewer'
 import Login from './pages/Login'
 import Register from './pages/Register'
@@ -38,6 +39,7 @@ function AppShell({ children, onOpenLogs }) {
     <div className="app-layout">
       <Sidebar onOpenLogs={onOpenLogs} />
       <main className="main-content">
+        <StatusHeader />
         {children}
       </main>
     </div>

@@ -1,4 +1,3 @@
-import WaitingBanner from '../components/WaitingBanner'
 import React, { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
@@ -264,7 +263,6 @@ export default function Dashboard() {
           </button>
         </div>
 
-      <WaitingBanner />
       </div>
 
       {searchMsg  && <div className="alert alert-success">✅ {searchMsg}</div>}

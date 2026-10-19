@@ -89,6 +89,7 @@ async def embed(text: str, model: str, url: str) -> List[float]:
 
 # "<key suffix>:<model>" -> monotonic time until which it is skipped (free tiers have daily quotas)
 _blocked: Dict[str, float] = {}
+_block_why: Dict[str, str] = {}
 
 
 def _slot(api_key: str, model: str) -> str:
@@ -102,7 +103,22 @@ def _usable(api_key: str, models: List[str]) -> List[str]:
 
 def _block(api_key: str, model: str, seconds: float, why: str) -> None:
     _blocked[_slot(api_key, model)] = time.monotonic() + seconds
+    _block_why[_slot(api_key, model)] = why
     logger.warning("AI %s (key …%s) %s — skipping it for %.1f h", model, api_key[-4:], why, seconds / 3600)
+
+
+def quota_status(settings: Any) -> List[Dict[str, Any]]:
+    """Per AI provider: which models are skipped right now, why, and for how many more minutes."""
+    now = time.monotonic()
+    out = []
+    for p in providers_for(settings):
+        models = GEMINI_MODELS if p.get("kind") == "gemini" else [p.get("model", "")]
+        blocked = [{"model": m, "why": _block_why.get(_slot(p["key"], m), ""),
+                    "minutes": int((_blocked[_slot(p["key"], m)] - now) // 60) + 1}
+                   for m in models if _blocked.get(_slot(p["key"], m), 0.0) > now]
+        out.append({"name": p.get("name") or p.get("kind", "AI").title(), "models": len(models),
+                    "blocked": blocked, "out": len(blocked) == len(models)})
+    return out
 
 
 def providers_for(settings: Any) -> List[Dict[str, str]]:
