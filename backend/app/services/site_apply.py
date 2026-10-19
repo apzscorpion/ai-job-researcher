@@ -139,7 +139,7 @@ async def apply_company_site(
             return "needs_manual", (f"{job.company} uses {host}, which needs an account there. "
                                     f"Apply here with the cover letter below: {url}"), url
         status, note, where = await _fill_and_submit(page, job, profile, settings, cover_letter, email, submit, url)
-        if status == "needs_manual" and submit and not re.search(r"captcha|needs an account", note, re.I):
+        if status in ("needs_manual", "failed") and submit and not re.search(r"captcha|needs an account", note, re.I):
             # The fixed form filler got stuck (modal, multi-step, chat widget…): the AI agent takes over
             from app.services.agent_apply import agent_apply
 

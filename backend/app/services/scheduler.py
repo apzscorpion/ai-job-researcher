@@ -547,7 +547,7 @@ def start_scheduler() -> None:
         )
 
         _scheduler.start()
-        logger.info("scheduler: started — search check hourly, apply check every 5min")
+        logger.info("scheduler: started — search check hourly, apply check every minute")
 
     except Exception:
         logger.exception("scheduler: failed to start")

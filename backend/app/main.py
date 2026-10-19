@@ -130,7 +130,7 @@ class BufferLogHandler(logging.Handler):
 
 _buffer_handler = BufferLogHandler()
 _buffer_handler.setFormatter(logging.Formatter("%(message)s"))
-for log_name in ["", "app", "uvicorn", "uvicorn.access", "uvicorn.error"]:
+for log_name in ["", "uvicorn", "uvicorn.access", "uvicorn.error"]:  # "app.*" reaches "" by propagation
     _l = logging.getLogger(log_name)
     _l.addHandler(_buffer_handler)
     _l.setLevel(logging.INFO)

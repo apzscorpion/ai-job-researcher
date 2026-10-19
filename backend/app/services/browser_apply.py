@@ -547,7 +547,8 @@ async def apply_naukri(
         if await apply_btn.count() == 0:
             if await page.locator(":text('Applied')").count() > 0:
                 return "applied", "Already applied on Naukri."
-            return "needs_manual", f"No Apply button found on Naukri. Check the job here: {job.url}"
+            return await _agent_finish(page, job, profile, settings,
+                                       "Find how to apply for this Naukri job on this page and complete the application.")
 
         await apply_btn.click()
         await random_sleep(1.5, 3.0)
@@ -570,9 +571,14 @@ async def apply_naukri(
                 return await _agent_finish(page, job, profile, settings,
                                            "Complete this Naukri application, answering the chatbot's screening questions.")
             await answer_input.press_sequentially(answer[:150], delay=random.randint(50, 150))
-            send = page.locator(".sendMsg, button:has-text('Save'), button:has-text('Submit')").first
-            if await send.count() > 0:
-                await send.click()
+            # the chat drawer's own send button ("Save" elsewhere on the page saves the job instead)
+            send = page.locator(".chatbot_SendButton, .sendMsg, .chatbot_InputContainer ~ * button, "
+                                "[class*=chatbot] button:has-text('Save'), [class*=chatbot] button:has-text('Submit')").first
+            try:
+                await send.click(timeout=8_000)
+            except Exception:
+                return await _agent_finish(page, job, profile, settings,
+                                           "Complete this Naukri application, answering the chatbot's screening questions.")
 
         if await page.locator(":text('successfully applied'), :text('Applied successfully'), .confirmation").count() > 0:
             return "applied", "Applied on Naukri with your Naukri profile and résumé."
