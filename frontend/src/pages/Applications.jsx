@@ -227,7 +227,7 @@ export default function Applications() {
     const onFocus = () => {
       loadApps()
       assistApi.status().then(s => {
-        setAssist(['starting', 'agent', 'asking', 'waiting_you'].includes(s.state) ? { title: s.title } : null)
+        setAssist(['starting', 'agent', 'asking', 'waiting_you', 'pausing', 'paused'].includes(s.state) ? { title: s.title } : null)
       }).catch(() => {})
     }
     window.addEventListener('focus', onFocus)
@@ -237,7 +237,7 @@ export default function Applications() {
   // An AI fill still running (e.g. its tab was closed): offer to open it again
   useEffect(() => {
     assistApi.status().then(s => {
-      if (['starting', 'agent', 'asking', 'waiting_you'].includes(s.state)) setAssist({ title: s.title })
+      if (['starting', 'agent', 'asking', 'waiting_you', 'pausing', 'paused'].includes(s.state)) setAssist({ title: s.title })
     }).catch(() => {})
   }, [])
 

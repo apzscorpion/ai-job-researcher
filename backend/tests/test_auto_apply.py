@@ -287,3 +287,25 @@ def test_country_from_location():
     p = _profile(location="Kochi, Kerala")
     assert profile_value("Country*", p, {}) == "India"
     assert profile_value("Country code", p, {}) == "" and profile_value("Country of citizenship", p, {}) == ""
+
+
+def test_assist_pause_blocks_the_agent_until_resume():
+    import asyncio
+
+    from app.services import assist
+
+    async def scenario():
+        s = {"app_id": 1, "state": "agent", "log": [], "page": None, "review": False, "chat": [], "answers": [],
+             "files": {}, "question": None, "paused": False, "unpaused": asyncio.Event(),
+             "done": asyncio.Event(), "resume": asyncio.Event(), "active": 0}
+        assist._sessions[997] = s
+        assert assist.pause(997)
+        waiting = asyncio.create_task(assist._gate(s))
+        await asyncio.sleep(0.05)
+        paused_state, still_waiting = s["state"], not waiting.done()
+        assert assist.unpause(997)
+        did_pause = await asyncio.wait_for(waiting, 3)
+        return paused_state, still_waiting, did_pause, s["state"]
+
+    assert asyncio.run(scenario()) == ("paused", True, True, "agent")
+    assist._sessions.pop(997, None)

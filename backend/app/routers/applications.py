@@ -282,6 +282,24 @@ async def assist_upload(
     return {"ok": True, "name": safe}
 
 
+@router.post("/assist/pause")
+def assist_pause(current_user: User = Depends(get_current_user)) -> Dict[str, bool]:
+    from app.services import assist
+
+    if not assist.pause(current_user.id):
+        raise HTTPException(status_code=409, detail="The AI isn't working right now")
+    return {"ok": True}
+
+
+@router.post("/assist/unpause")
+def assist_unpause(current_user: User = Depends(get_current_user)) -> Dict[str, bool]:
+    from app.services import assist
+
+    if not assist.unpause(current_user.id):
+        raise HTTPException(status_code=409, detail="Nothing is paused")
+    return {"ok": True}
+
+
 @router.post("/assist/close")
 def assist_close(current_user: User = Depends(get_current_user)) -> Dict[str, bool]:
     from app.services import assist

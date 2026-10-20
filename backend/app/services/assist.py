@@ -38,7 +38,7 @@ def status(user_id: int) -> Dict[str, Any]:
             "url": (connections.current_page(s) or page).url if page and s["state"] not in ("closed", "error") else ""}
 
 
-LIVE = ("starting", "agent", "asking", "waiting_you")
+LIVE = ("starting", "agent", "asking", "waiting_you", "pausing", "paused")
 
 
 def busy(user_id: int) -> bool:
@@ -47,7 +47,8 @@ def busy(user_id: int) -> bool:
 
 def start(user_id: int, app_id: int, review: bool = False) -> None:
     session: Dict[str, Any] = {"app_id": app_id, "state": "starting", "log": [], "page": None, "review": review,
-                               "chat": [], "answers": [], "files": {}, "question": None,
+                               "chat": [], "answers": [], "files": {}, "question": None, "paused": False,
+                               "unpaused": asyncio.Event(),
                                "done": asyncio.Event(), "resume": asyncio.Event(), "active": time.monotonic()}
     _sessions[user_id] = session
     session["task"] = asyncio.create_task(_run(user_id, app_id, session))
@@ -58,6 +59,44 @@ def resume(user_id: int) -> bool:
     if not s or s["state"] not in ("waiting_you", "asking"):
         return False
     s["resume"].set()
+    return True
+
+
+def pause(user_id: int) -> bool:
+    """Stop the AI before its next action; the live browser stays usable so the user can fix things."""
+    s = _sessions.get(user_id)
+    if not s or s["state"] not in ("starting", "agent"):
+        return False
+    s["paused"] = True
+    s["unpaused"].clear()
+    s["state"] = "pausing"  # until the AI's current step comes back (an AI answer can take ~30 s)
+    _say(s, "⏸ Pausing — the AI stops after its current step. Fix anything in the window, then press Resume.")
+    return True
+
+
+def unpause(user_id: int) -> bool:
+    s = _sessions.get(user_id)
+    if not s or not s.get("paused"):
+        return False
+    s["paused"] = False
+    s["unpaused"].set()
+    if s["state"] == "pausing":  # resumed before the AI's current step even finished
+        s["state"] = "agent"
+    return True
+
+
+async def _gate(session: Dict[str, Any]) -> bool:
+    """Called by the agent between actions: blocks while paused. True if it did pause (re-read the page)."""
+    if not session.get("paused"):
+        return False
+    session["state"] = "paused"
+    while session.get("paused") and not session["done"].is_set():
+        try:
+            await asyncio.wait_for(session["unpaused"].wait(), timeout=2)
+        except asyncio.TimeoutError:
+            pass
+    session["state"] = "agent"
+    _say(session, "▶ Resumed — the AI is re-reading the page, including your changes.")
     return True
 
 
@@ -95,10 +134,12 @@ def close(user_id: int) -> None:
     if s:
         s["done"].set()
         s["resume"].set()
+        s["paused"] = False
+        s.get("unpaused", asyncio.Event()).set()
         task = s.get("task")
         if task and not task.done():
             task.cancel()  # the browser closes in _run's finally blocks
-        if s["state"] in ("starting", "agent", "waiting_you"):
+        if s["state"] in LIVE:
             s["state"] = "closed"
             _say(s, "Closed by you — nothing more will be done on this page.")
 
@@ -231,9 +272,12 @@ async def _run(user_id: int, app_id: int, session: Dict[str, Any]) -> None:
                             result, note = await agent_apply(context.pages[-1], job, profile, settings, goal,
                                                              app.cover_letter or "", cover_path, email, on_step=on_step,
                                                              answers=session["answers"], extra_files=session["files"],
-                                                             allow_ask=True, on_page=on_page)
+                                                             allow_ask=True, on_page=on_page,
+                                                             gate=lambda: _gate(session))
                             page = context.pages[-1]
                             session["page"] = connections._remote[user_id]["page"] = page
+                            session["paused"] = False  # the run ended on its own: a late Pause mustn't linger
+                            session["unpaused"].set()
                             if result == "ask":
                                 session["question"], session["state"] = note, "asking"
                                 _say(session, note, kind="question")

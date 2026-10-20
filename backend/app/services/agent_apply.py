@@ -318,7 +318,7 @@ async def agent_apply(page, job: Job, profile: Profile, settings: Settings, goal
                       cover_letter: str = "", cover_letter_path: str = "", email: str = "",
                       on_step=None, answers: Optional[List[str]] = None,
                       extra_files: Optional[Dict[str, str]] = None, allow_ask: bool = False,
-                      on_page=None) -> Tuple[str, str]:
+                      on_page=None, gate=None) -> Tuple[str, str]:
     """Returns (status, note). With allow_ask (the live "Fill with AI" chat), status can be "ask": note is the
     question for the candidate; their reply comes back in *answers* / *extra_files* on the next call."""
     files = {"resume": profile.resume_path or "", "cover_letter": cover_letter_path, **(extra_files or {})}
@@ -328,6 +328,8 @@ async def agent_apply(page, job: Job, profile: Profile, settings: Settings, goal
     context = page.context
     last_host = None
     for step in range(MAX_STEPS):
+        if gate:
+            await gate()  # the user pressed Pause: wait here, then look at the page fresh
         if len(context.pages) > 1:  # "Apply" opened a new tab: follow it
             page = context.pages[-1]
         await page.wait_for_load_state("domcontentloaded")
@@ -372,6 +374,8 @@ async def agent_apply(page, job: Job, profile: Profile, settings: Settings, goal
         if status == "cannot_apply":
             return "needs_manual", f"Can't apply here: {reason} ({page.url})"
         for action in (plan.get("actions") or [])[:8]:
+            if gate and await gate():
+                break  # paused mid-plan: the page may have changed, so re-read it instead of continuing
             try:
                 history.append(f"step {step}: " + await _act(page, frames, action, files))
             except Exception as exc:

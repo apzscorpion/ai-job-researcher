@@ -8,12 +8,14 @@ const STATE = {
   agent:       ['🤖', 'The AI is filling the form', 'info'],
   asking:      ['❓', 'The AI has a question for you — answer in the chat', 'warn'],
   waiting_you: ['✋', 'Your turn — act in the window, then reply in the chat', 'warn'],
+  pausing:     ['⏸', 'Pausing — the AI stops after its current step…', 'warn'],
+  paused:      ['⏸', 'Paused — fix anything in the window, then press Resume', 'warn'],
   applied:     ['✅', 'Applied — the site confirmed it', 'ok'],
   closed:      ['■', 'Stopped', 'muted'],
   error:       ['⚠️', 'Browser error — see the chat', 'bad'],
   none:        ['•', 'No AI fill is running', 'muted'],
 }
-const LIVE = ['starting', 'agent', 'asking', 'waiting_you']
+const LIVE = ['starting', 'agent', 'asking', 'waiting_you', 'pausing', 'paused']
 
 // Full-page "Fill with AI": the big live browser on the left, the AI's progress and questions as a chat
 // on the right — answer in text or attach a file, and the AI carries on by itself.
@@ -97,6 +99,13 @@ export default function LiveApply() {
         </div>
         <span className={`live-state live-${tone}`} role="status">{icon} {label}</span>
         <div className="live-actions">
+          {['starting', 'agent'].includes(st.state) && (
+            <button className="btn btn-warning btn-sm" disabled={busy} onClick={() => act(assistApi.pause)}
+              title="Stop the AI before its next action so you can fix things in the window">⏸ Pause</button>
+          )}
+          {['paused', 'pausing'].includes(st.state) && (
+            <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => act(assistApi.unpause)}>▶ Resume</button>
+          )}
           {live && st.app_id && (
             <button className="btn btn-success btn-sm" disabled={busy} title="You submitted it yourself"
               onClick={() => act(() => assistApi.markApplied(st.app_id))}>✔ Mark as applied</button>
