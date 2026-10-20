@@ -482,8 +482,8 @@ async def remote_frame(current_user: User = Depends(get_current_user)):
 
 class RemoteInput(BaseModel):
     kind: Literal["click", "type", "key", "scroll"]
-    x: Annotated[float, Field(ge=0, le=4000)] = 0
-    y: Annotated[float, Field(ge=0, le=4000)] = 0
+    x: Annotated[float, Field(ge=0, le=1)] = 0  # fraction of the live picture's width
+    y: Annotated[float, Field(ge=0, le=1)] = 0  # fraction of its height
     text: Annotated[str, Field(max_length=500)] = ""
     key: Annotated[str, Field(max_length=20)] = ""
     dy: Annotated[float, Field(ge=-2000, le=2000)] = 0

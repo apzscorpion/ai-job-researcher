@@ -32,10 +32,9 @@ export default function LiveView({ label, url }) {
   const send = body => remoteSignIn.input(body).then(() => setError('')).catch(err => setError(err.message))
 
   function click(e) {
-    const img = imgRef.current
-    const r = img.getBoundingClientRect()
-    send({ kind: 'click', x: (e.clientX - r.left) * img.naturalWidth / r.width,
-           y: (e.clientY - r.top) * img.naturalHeight / r.height })
+    const r = imgRef.current.getBoundingClientRect()
+    // where in the picture, as fractions: the server maps them onto the page (works at any display scaling)
+    send({ kind: 'click', x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height })
     boxRef.current?.focus()
   }
 

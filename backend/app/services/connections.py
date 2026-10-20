@@ -287,7 +287,10 @@ async def remote_input(user_id: int, kind: str, x: float = 0, y: float = 0, text
         return False
     s["active"] = time.monotonic()
     if kind == "click":
-        await page.mouse.click(x, y)
+        # x, y are fractions of the picture (0..1): the screenshot is in device pixels, which differ from
+        # the page's own coordinates on scaled displays (125 % made every click land 20 % off target)
+        w, h = await page.evaluate("[window.innerWidth, window.innerHeight]")
+        await page.mouse.click(min(max(x, 0.0), 1.0) * w, min(max(y, 0.0), 1.0) * h)
     elif kind == "type":
         await page.keyboard.type(text[:500], delay=25)
     elif kind == "key" and key in _KEYS:
