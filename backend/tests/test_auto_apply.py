@@ -277,3 +277,13 @@ def test_assist_chat_reply_and_file_reach_the_agent():
     assert s["files"] == {"upload_1": "/tmp/degree.pdf"} and 'upload_1' in s["answers"][1]
     assert [m["from"] for m in s["chat"]] == ["you", "you"]
     assist._sessions.pop(998, None)
+
+
+def test_country_from_location():
+    from app.services.browser_apply import country_of, profile_value
+
+    assert country_of("Pathanamthitta, Kerala") == "India"
+    assert country_of("Berlin, Berlin, Germany") == "Germany" and country_of("Somewhere") == ""
+    p = _profile(location="Kochi, Kerala")
+    assert profile_value("Country*", p, {}) == "India"
+    assert profile_value("Country code", p, {}) == "" and profile_value("Country of citizenship", p, {}) == ""

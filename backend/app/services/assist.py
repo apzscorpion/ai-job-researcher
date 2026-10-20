@@ -114,6 +114,44 @@ def _say(session: Dict[str, Any], text: str, kind: str = "info") -> None:
     _chat(session, "ai", text, kind)
 
 
+async def _wait_for_user(session: Dict[str, Any]) -> bool:
+    """Until the user replies / presses Continue (True) or goes idle or closes (False)."""
+    session["resume"].clear()
+    deadline = time.monotonic() + _IDLE_S
+    while not session["resume"].is_set() and time.monotonic() < deadline:
+        try:
+            await asyncio.wait_for(session["resume"].wait(), timeout=2)
+        except asyncio.TimeoutError:
+            pass
+    return session["resume"].is_set() and not session["done"].is_set()
+
+
+async def _quick_fill(session: Dict[str, Any], page, profile, settings, extra: Dict[str, Any]) -> None:
+    """The fast, rule-based filler first (Greenhouse/Lever/Ashby-style forms, dropdowns included): seconds
+    instead of an AI round trip per field. Whatever it can't answer is asked in the chat right away."""
+    from app.services.browser_apply import fill_form
+
+    scope = "form:has(input[type=file]), form:has(input[type=email])"
+    try:
+        if await page.locator(scope).count() == 0:
+            return  # no form yet (an "Apply" button first, a login…): the AI agent handles the page
+        await page.locator(scope).first.evaluate("f => f.setAttribute('data-af-form', '1')")
+        session["state"] = "agent"
+        _say(session, "Filling the standard fields and dropdowns…")
+        start = time.monotonic()
+        unknown = await fill_form(page, "form[data-af-form]", profile, settings, extra)
+        _say(session, f"Standard fields done in {int(time.monotonic() - start)} s.")
+    except Exception as exc:
+        logger.info("assist: quick fill skipped: %s", exc)
+        return
+    if unknown:
+        session["question"] = ("I need your answers for: " + "; ".join(f"“{q}”" for q in unknown[:8])
+                               + ". Reply with them (one per line), or attach a file if one is a document.")
+        session["state"] = "asking"
+        _say(session, session["question"], kind="question")
+        await _wait_for_user(session)
+
+
 async def _run(user_id: int, app_id: int, session: Dict[str, Any]) -> None:
     from playwright.async_api import async_playwright  # type: ignore
     from sqlmodel import Session, select
@@ -169,6 +207,9 @@ async def _run(user_id: int, app_id: int, session: Dict[str, Any]) -> None:
                                     f"from the candidate's data, upload the résumé. Do NOT click the final Submit / Apply "
                                     f"button: when everything is filled, stop with status \"need_human\" and reason "
                                     f"\"Everything is filled — review it and click Submit\".")
+                        await _quick_fill(session, context.pages[-1], profile, settings, {
+                            "email": email, "resume_path": profile.resume_path, "cover_letter": app.cover_letter or "",
+                            "cover_letter_path": cover_path})
                         while not session["done"].is_set():
                             session["state"] = "agent"
                             _say(session, "AI is reading the page and filling the form…")

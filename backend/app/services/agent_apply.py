@@ -67,6 +67,15 @@ _OBSERVE_JS = r"""
       if (tag === 'select') { d.options = [...e.options].map(o => o.text.trim()).slice(0, 25); d.value = e.selectedOptions[0]?.text || ''; }
       else if (['checkbox', 'radio'].includes(e.type)) d.checked = e.checked;
       else if (e.type === 'file') d.has_file = e.files && e.files.length > 0;
+      else if (e.getAttribute('role') === 'combobox' || e.getAttribute('aria-autocomplete')) {
+        // custom dropdowns show the chosen option in a sibling, not in the input: report what's selected
+        let box = e;
+        for (let i = 0; i < 5 && box && !box.querySelector('[class*="single-value"],[class*="singleValue"],[class*="multi-value"],[class*="multiValue"]'); i++) box = box.parentElement;
+        const chosen = box && [...box.querySelectorAll('[class*="single-value"],[class*="singleValue"],[class*="multi-value__label"],[class*="multiValue"]')]
+          .map(x => x.innerText.trim()).filter(Boolean).join(', ');
+        d.value = (chosen || e.value || '').slice(0, 80);
+        d.selected = Boolean(chosen);
+      }
       else d.value = (e.value || e.innerText || '').slice(0, 60);
     }
     out.push(d);
@@ -224,6 +233,12 @@ How to work:
   nearest larger city that is listed in the same state/country (e.g. a district town → the state's main city).
 - Education and employment questions: use the "education" and "work_history" data (school, degree,
   discipline/major, dates, employer, title). Use the résumé text if those are empty.
+- Searchable / custom dropdowns (role=combobox, "Select...") — ONE action: {{"type":"choose","id":..,"value":"<what
+  to pick>"}} opens it, types and picks the closest option. If it reports no match, choose "Other" or the nearest.
+  Fill as many fields as possible per step (up to 8 actions).
+- CHECK before acting: an element whose "value" is already right (dropdowns show what's selected) is done —
+  never fill or choose it again. Read "Actions so far": if an action failed, try something different
+  (another option text, "Other", or ask) instead of repeating it.
 - Upload files with {{"type":"upload","id":..,"file":"resume"}} ("cover_letter", or a key from the list above).
 - Submit when everything required is filled.
 - STOP with status "need_human" for: captcha or "verify you are human", login or account creation /
@@ -240,7 +255,7 @@ Current browser state (element ids are only valid for this step):
 Reply with ONLY JSON:
 {{"status": "continue" | "applied" | "need_human" | "cannot_apply"{' | "ask"' if allow_ask else ''},
   "reason": "<one short sentence>",{' "question": "<only with ask>",' if allow_ask else ''}
-  "actions": [{{"type": "click"|"fill"|"select"|"check"|"upload"|"press"|"wait", "id": "<element id>",
+  "actions": [{{"type": "click"|"fill"|"choose"|"select"|"check"|"upload"|"press"|"wait", "id": "<element id>",
                "value": "<text / option / key like Enter>", "file": "resume"|"cover_letter"}}]}}
 At most 8 actions; an empty list when status is not "continue"."""
 
@@ -267,6 +282,24 @@ async def _act(page, frames: Dict[str, Any], action: Dict[str, Any], files: Dict
             await el.select_option(label=value, timeout=5_000)
         except Exception:
             await el.select_option(value=value, timeout=5_000)
+    elif kind == "choose":
+        # searchable dropdown in one action: open it, type, pick the closest option
+        from app.services.browser_apply import best_match, pick_option
+
+        await el.click(timeout=8_000)
+        await asyncio.sleep(0.5)
+        if await el.evaluate("e => e.tagName === 'INPUT' || e.isContentEditable"):
+            await el.fill("")
+            await el.press_sequentially(value[:80], delay=40)
+            await asyncio.sleep(1.4)
+        options = frame.locator("[role=option]:visible")
+        texts = [t.strip() for t in await options.all_inner_texts() if t.strip()]
+        pick = pick_option(value, texts) or best_match(value, texts)
+        if not pick:
+            await el.press("Escape")
+            return f"choose {el_id}: no option like {value!r} (saw: {', '.join(texts[:6]) or 'none'})"
+        await options.filter(has_text=pick).first.click(timeout=5_000)
+        return f"choose {el_id} = {pick!r}"
     elif kind == "check":
         await el.check(timeout=5_000)
     elif kind == "upload":

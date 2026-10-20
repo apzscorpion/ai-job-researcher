@@ -216,7 +216,20 @@ def profile_value(label: str, profile: Profile, extra: dict) -> str:
         return profile.linkedin_url or ""
     if lab.rstrip(" *") in ("city", "location", "current location", "location (city)"):
         return profile.location or ""
+    if re.search(r"\bcountry\b", lab) and not re.search(r"code|citizen|authori[sz]|visa|work in", lab):
+        return country_of(profile.location or "")
     return ""
+
+
+def country_of(location: str) -> str:
+    """The country in a location ("Pathanamthitta, Kerala" → "India"); "" when unknown."""
+    from app.services.regions import STATES
+
+    loc = location.lower()
+    if "india" in loc or any(w in loc for words in STATES.values() for w in words):
+        return "India"
+    parts = [p.strip() for p in location.split(",") if p.strip()]
+    return parts[-1] if len(parts) >= 3 else ""
 
 
 def same_place(option: str, location: str) -> bool:
@@ -227,6 +240,21 @@ def same_place(option: str, location: str) -> bool:
     o = option.lower()
     first = o.split(",")[0].strip()
     return first in parts and all(p in o for p in parts if p != first)
+
+
+def best_match(value: str, options: List[str]) -> str:
+    """Closest option by shared words ("NSS Polytechnic College" ~ "N.S.S. Polytechnic College, Pandalam");
+    "" when nothing is close enough."""
+    words = lambda s: {w for w in re.findall(r"[a-z0-9]+", s.lower()) if len(w) > 1}
+    want = words(value)
+    if not want:
+        return ""
+    scored = [(len(want & words(o)) / len(want | words(o)), o) for o in options if words(o)]
+    best = max(scored, default=(0.0, ""))
+    return best[1] if best[0] >= 0.34 else ""
+
+
+_PLACE = re.compile(r"(city|location|town|where .*live|address|state|province)", re.I)
 
 
 async def _fill_combobox(page, el, label: str, profile: Profile, settings: Settings, extra: dict) -> bool:
@@ -243,15 +271,24 @@ async def _fill_combobox(page, el, label: str, profile: Profile, settings: Setti
     if options:
         choice = pick_option(profile_value(label, profile, extra), options) or \
             await answer_question(label, profile, settings, options[:60])
-    else:  # search-as-you-type list, e.g. a city
+    else:  # search-as-you-type list: a city, a school, a degree…
         value = profile_value(label, profile, extra) or await answer_question(label, profile, settings)
-        for part in [x.strip() for x in value.split(",") if x.strip()]:
+        place = bool(_PLACE.search(label))
+        tries = [x.strip() for x in value.split(",") if x.strip()] if place else             [value, " ".join(value.split()[:2])] if value else []
+        for part in dict.fromkeys(tries):
             await el.fill("")
-            await el.press_sequentially(part, delay=random.randint(60, 120))
-            await random_sleep(1.5, 2.5)
-            choice = next((o for o in await visible_options() if same_place(o, value)), "")
+            await el.press_sequentially(part, delay=random.randint(40, 90))
+            await random_sleep(1.2, 2.0)
+            found = await visible_options()
+            choice = next((o for o in found if same_place(o, value)), "") if place else best_match(value, found)
             if choice:
                 break
+        if not choice and not place and value:
+            # not in their list: "Other" if offered, else let the AI pick from what the search shows
+            await el.fill("")
+            await el.press_sequentially("Other", delay=60)
+            await random_sleep(1.0, 1.6)
+            choice = next((o for o in await visible_options() if o.strip().lower().startswith("other")), "")
     if not choice:
         if not options:
             await el.fill("")  # don't leave half-typed search text behind
