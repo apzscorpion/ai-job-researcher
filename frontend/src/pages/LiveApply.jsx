@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { assistApi } from '../api'
 import LiveView from '../components/LiveView'
 
@@ -22,6 +22,9 @@ export default function LiveApply() {
   const [text, setText]   = useState('')
   const [busy, setBusy]   = useState(false)
   const [err, setErr]     = useState('')
+  const [closingIn, setClosingIn] = useState(null)   // seconds until this tab closes itself
+  const wasLive = useRef(false)
+  const navigate = useNavigate()
   const listRef = useRef(null)
   const fileRef = useRef(null)
   const inputRef = useRef(null)
@@ -38,6 +41,25 @@ export default function LiveApply() {
     const t = setInterval(poll, 1200)
     return () => { alive = false; clearInterval(t) }
   }, [])
+
+  // Session over (applied / stopped): close this tab by itself — errors stay open so you can read them
+  useEffect(() => {
+    if (LIVE.includes(st.state)) { wasLive.current = true; return }
+    if (wasLive.current && ['applied', 'closed'].includes(st.state) && closingIn === null) {
+      setClosingIn(st.state === 'applied' ? 5 : 3)
+    }
+  }, [st.state, closingIn])
+
+  useEffect(() => {
+    if (closingIn === null) return
+    if (closingIn <= 0) {
+      window.close()  // works for the tab the Applications page opened
+      const t = setTimeout(() => navigate('/applications'), 300)  // if the browser kept it open
+      return () => clearTimeout(t)
+    }
+    const t = setTimeout(() => setClosingIn(s => (s === null ? null : s - 1)), 1000)
+    return () => clearTimeout(t)
+  }, [closingIn, navigate])
 
   const count = st.chat?.length || 0
   useEffect(() => { listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: 'smooth' }) }, [count])
@@ -85,6 +107,12 @@ export default function LiveApply() {
       </header>
 
       <main className="live-main">
+        {closingIn !== null && (
+          <div className="live-closing" role="status">
+            {st.state === 'applied' ? '✅ Applied — ' : 'Session finished — '}closing this tab in {Math.max(closingIn, 0)} s…
+            <button className="btn btn-secondary btn-sm" onClick={() => setClosingIn(null)}>Keep open</button>
+          </div>
+        )}
         <section className="live-browser" aria-label="Live browser">
           {live ? <LiveView label={st.title || 'Application'} url={st.url} />
                 : <div className="live-empty">{st.state === 'applied' ? '✅ Applied. You can close this tab.'

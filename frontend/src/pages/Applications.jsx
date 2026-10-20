@@ -222,6 +222,18 @@ export default function Applications() {
     finally { setLinkBusy(false) }
   }
 
+  // Back from a "Fill with AI" tab: show the latest statuses
+  useEffect(() => {
+    const onFocus = () => {
+      loadApps()
+      assistApi.status().then(s => {
+        setAssist(['starting', 'agent', 'asking', 'waiting_you'].includes(s.state) ? { title: s.title } : null)
+      }).catch(() => {})
+    }
+    window.addEventListener('focus', onFocus)
+    return () => window.removeEventListener('focus', onFocus)
+  }, [loadApps])
+
   // An AI fill still running (e.g. its tab was closed): offer to open it again
   useEffect(() => {
     assistApi.status().then(s => {
