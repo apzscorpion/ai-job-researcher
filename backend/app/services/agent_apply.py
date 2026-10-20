@@ -107,12 +107,13 @@ def screen_check(snaps: List[Dict[str, Any]]) -> Optional[Tuple[str, str]]:
 
 
 async def plan_step(job: Job, profile: Profile, settings: Settings, goal: str, cover_letter: str, email: str,
-                    history: List[str], obs: str) -> Tuple[Dict[str, Any], str]:
+                    history: List[str], obs: str, answers: Optional[List[str]] = None,
+                    file_keys: Optional[Dict[str, str]] = None, allow_ask: bool = False) -> Tuple[Dict[str, Any], str]:
     """One model call: {status, reason, actions} for the current page (shared by the server and the extension)."""
     from app.services.llm import generate, providers_for
 
     prompt = _prompt(goal, job, _candidate(profile, settings, email, cover_letter), profile.resume_text or "",
-                     cover_letter, history, obs)
+                     cover_letter, history, obs, answers or [], file_keys or {}, allow_ask)
     used = ""
     for _attempt in range(2):  # a reply that isn't valid JSON gets one retry
         raw, used = await generate(prompt, providers_for(settings), OLLAMA_MODEL, OLLAMA_URL,
@@ -182,8 +183,14 @@ _SOURCE_NAMES = {"linkedin": "LinkedIn", "naukri": "Naukri", "indeed": "Indeed",
                  "remoteok": "RemoteOK", "remotive": "Remotive", "infopark": "Infopark", "technopark": "Technopark"}
 
 
-def _prompt(goal: str, job: Job, candidate: str, resume: str, cover_letter: str, history: List[str], obs: str) -> str:
+def _prompt(goal: str, job: Job, candidate: str, resume: str, cover_letter: str, history: List[str], obs: str,
+            answers: List[str] = (), file_keys: Dict[str, str] = None, allow_ask: bool = False) -> str:
     source = _SOURCE_NAMES.get(job.source or "", "Online job board")
+    files = "\n".join(f'- "{k}": {v}' for k, v in (file_keys or {}).items()) or "(none besides resume / cover_letter)"
+    told = "\n".join(f"- {a}" for a in answers) or "(none yet)"
+    missing_rule = ('use status "ask" with ONE short, clear question for the candidate in "question" (they '
+                    'answer in a chat and can attach a file) — never guess'
+                    if allow_ask else 'STOP with "need_human" and name the question — never guess')
     return f"""You are an autonomous job-application agent operating a web browser for the candidate.
 GOAL: {goal}
 Job: "{job.title}" at {job.company}.
@@ -198,6 +205,12 @@ Candidate data (use exactly; never invent personal facts):
 {cover_letter[:1500]}
 </cover_letter>
 
+What the candidate told you during this application (use it; it overrides the data above):
+{told}
+
+Files you can upload, besides "resume" and "cover_letter":
+{files}
+
 How to work:
 - Find how this site takes applications: "Apply"/"Easy Apply"/"Apply now" buttons, modals, multi-step
   forms, chat or bot widgets that ask screening questions (type the answer in the chat box, then press Enter
@@ -205,13 +218,13 @@ How to work:
 - Fill every required field (and obvious optional ones like LinkedIn URL). For questions not covered by the
   data, answer as the candidate would, professionally (motivation: 2 formal sentences from the résumé;
   how did you hear: "{source}"; demographic questions: "Prefer not to say"/"Decline").
-- Salary (current or expected), notice period in days and other figures: ONLY from standard_answers. If a
-  required one is missing there, STOP with "need_human" and name the question — never guess a number.
+- Salary (current or expected), notice period in days and other figures: ONLY from standard_answers or what
+  the candidate told you. If a required one (or any required fact or document) is missing, {missing_rule}.
 - Location / city autocompletes: type the candidate's city; if the list doesn't offer it, choose the
   nearest larger city that is listed in the same state/country (e.g. a district town → the state's main city).
 - Education and employment questions: use the "education" and "work_history" data (school, degree,
   discipline/major, dates, employer, title). Use the résumé text if those are empty.
-- Upload files with {{"type":"upload","id":..,"file":"resume"}} or "cover_letter" on file inputs.
+- Upload files with {{"type":"upload","id":..,"file":"resume"}} ("cover_letter", or a key from the list above).
 - Submit when everything required is filled.
 - STOP with status "need_human" for: captcha or "verify you are human", login or account creation /
   sign-up (never fill a sign-up form), password, email/OTP verification, payment. STOP with "cannot_apply" if the job is closed or the
@@ -225,8 +238,8 @@ Current browser state (element ids are only valid for this step):
 {obs}
 
 Reply with ONLY JSON:
-{{"status": "continue" | "applied" | "need_human" | "cannot_apply",
-  "reason": "<one short sentence>",
+{{"status": "continue" | "applied" | "need_human" | "cannot_apply"{' | "ask"' if allow_ask else ''},
+  "reason": "<one short sentence>",{' "question": "<only with ask>",' if allow_ask else ''}
   "actions": [{{"type": "click"|"fill"|"select"|"check"|"upload"|"press"|"wait", "id": "<element id>",
                "value": "<text / option / key like Enter>", "file": "resume"|"cover_letter"}}]}}
 At most 8 actions; an empty list when status is not "continue"."""
@@ -270,8 +283,12 @@ async def _act(page, frames: Dict[str, Any], action: Dict[str, Any], files: Dict
 
 async def agent_apply(page, job: Job, profile: Profile, settings: Settings, goal: str,
                       cover_letter: str = "", cover_letter_path: str = "", email: str = "",
-                      on_step=None) -> Tuple[str, str]:
-    files = {"resume": profile.resume_path or "", "cover_letter": cover_letter_path}
+                      on_step=None, answers: Optional[List[str]] = None,
+                      extra_files: Optional[Dict[str, str]] = None, allow_ask: bool = False) -> Tuple[str, str]:
+    """Returns (status, note). With allow_ask (the live "Fill with AI" chat), status can be "ask": note is the
+    question for the candidate; their reply comes back in *answers* / *extra_files* on the next call."""
+    files = {"resume": profile.resume_path or "", "cover_letter": cover_letter_path, **(extra_files or {})}
+    file_keys = {k: v.rsplit("/", 1)[-1].rsplit("\\", 1)[-1] for k, v in (extra_files or {}).items()}
     history: List[str] = []
     claimed = False
     context = page.context
@@ -291,7 +308,8 @@ async def agent_apply(page, job: Job, profile: Profile, settings: Settings, goal
                                     f"(Settings → Job sites → Connect) and retry, or finish here: {page.url}")
 
         obs, frames = await _observe(page)
-        plan, used = await plan_step(job, profile, settings, goal, cover_letter, email, history, obs)
+        plan, used = await plan_step(job, profile, settings, goal, cover_letter, email, history, obs,
+                                     answers, file_keys, allow_ask)
         if not plan:
             return "needs_manual", f"The AI agent got no usable reply (AI quota?). Finish it here: {page.url}"
         status, reason = plan.get("status", "continue"), str(plan.get("reason", ""))[:200]
@@ -309,6 +327,8 @@ async def agent_apply(page, job: Job, profile: Profile, settings: Settings, goal
             claimed = True
             history.append(f"step {step}: model said applied, but the page shows no confirmation yet")
             continue
+        if status == "ask" and allow_ask:
+            return "ask", str(plan.get("question") or reason)[:400]
         if status == "need_human":
             return "needs_manual", f"Needs you: {reason} Finish it here: {page.url}"
         if status == "cannot_apply":

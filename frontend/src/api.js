@@ -171,6 +171,12 @@ export const assistApi = {
   resume:      ()    => apiFetch('/applications/assist/continue', { method: 'POST' }),
   close:       ()    => apiFetch('/applications/assist/close', { method: 'POST' }),
   markApplied: appId => apiFetch(`/applications/${appId}/mark-applied`, { method: 'POST' }),
+  reply:       text  => apiFetch('/applications/assist/reply', { method: 'POST', body: JSON.stringify({ text }) }),
+  upload:      file  => {
+    const form = new FormData()
+    form.append('file', file)
+    return apiFetch('/applications/assist/upload', { method: 'POST', body: form })
+  },
 }
 
 // Sign-in window that runs on the host and is shown inside the website

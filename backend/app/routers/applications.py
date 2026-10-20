@@ -7,7 +7,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 from sqlmodel import Session, col, func, or_, select
 
@@ -233,6 +233,53 @@ def assist_continue(current_user: User = Depends(get_current_user)) -> Dict[str,
     if not assist.resume(current_user.id):
         raise HTTPException(status_code=409, detail="The AI isn't waiting for you right now")
     return {"ok": True}
+
+
+class ReplyBody(BaseModel):
+    text: str = Field(..., min_length=1, max_length=2000)
+
+
+@router.post("/assist/reply")
+def assist_reply(body: ReplyBody, current_user: User = Depends(get_current_user)) -> Dict[str, bool]:
+    from app.services import assist
+
+    if not assist.reply(current_user.id, body.text.strip()):
+        raise HTTPException(status_code=409, detail="No AI fill is running")
+    return {"ok": True}
+
+
+_ASSIST_FILE_TYPES = {".pdf", ".doc", ".docx", ".txt", ".rtf", ".png", ".jpg", ".jpeg", ".odt"}
+
+
+@router.post("/assist/upload")
+async def assist_upload(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """A file for the AI to attach to the form (certificate, portfolio, transcript…)."""
+    import re
+    from pathlib import Path
+
+    from app.config import DATA_DIR
+    from app.security import rate_limit
+    from app.services import assist
+
+    rate_limit(f"assist-upload:{current_user.id}", 20, 3600)
+    name = Path(file.filename or "file").name
+    suffix = Path(name).suffix.lower()
+    if suffix not in _ASSIST_FILE_TYPES:
+        raise HTTPException(status_code=422, detail=f"Unsupported file type {suffix or '(none)'}")
+    content = await file.read(10 * 1024 * 1024 + 1)
+    if len(content) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Files must be under 10 MB")
+    folder = DATA_DIR / "tmp" / "assist" / str(current_user.id)
+    folder.mkdir(parents=True, exist_ok=True)
+    safe = (re.sub(r"[^\w.-]+", "_", Path(name).stem)[:60].strip("._") or "file") + suffix
+    path = folder / safe
+    path.write_bytes(content)
+    if not assist.add_file(current_user.id, safe, str(path)):
+        raise HTTPException(status_code=409, detail="No AI fill is running")
+    return {"ok": True, "name": safe}
 
 
 @router.post("/assist/close")

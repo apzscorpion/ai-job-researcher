@@ -244,7 +244,7 @@ def test_assist_close_stops_a_running_fill():
         async def never_ending():
             await asyncio.sleep(3600)  # stands in for the AI mid-form
 
-        s = {"app_id": 1, "state": "agent", "log": [], "page": None, "review": False,
+        s = {"app_id": 1, "state": "agent", "log": [], "page": None, "review": False, "chat": [], "answers": [], "files": {},
              "done": asyncio.Event(), "resume": asyncio.Event(), "active": 0}
         s["task"] = asyncio.create_task(never_ending())
         assist._sessions[999] = s
@@ -256,3 +256,24 @@ def test_assist_close_stops_a_running_fill():
     cancelled, state = asyncio.run(scenario())
     assert cancelled and state == "closed"
     assist._sessions.pop(999, None)
+
+
+def test_assist_chat_reply_and_file_reach_the_agent():
+    import asyncio
+
+    from app.services import assist
+
+    async def scenario():
+        s = {"app_id": 1, "state": "asking", "log": [], "page": None, "review": False, "chat": [], "answers": [],
+             "files": {}, "question": "What is your notice period?", "done": asyncio.Event(),
+             "resume": asyncio.Event(), "active": 0}
+        assist._sessions[998] = s
+        assert assist.reply(998, "30 days")
+        assert s["resume"].is_set() and "30 days" in s["answers"][0] and "notice period" in s["answers"][0]
+        assert assist.add_file(998, "degree.pdf", "/tmp/degree.pdf")
+        return s
+
+    s = asyncio.run(scenario())
+    assert s["files"] == {"upload_1": "/tmp/degree.pdf"} and 'upload_1' in s["answers"][1]
+    assert [m["from"] for m in s["chat"]] == ["you", "you"]
+    assist._sessions.pop(998, None)

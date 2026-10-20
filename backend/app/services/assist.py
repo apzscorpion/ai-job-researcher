@@ -7,7 +7,9 @@ start(user_id, app_id)   — open the job's application page in the right signed
 status(user_id)          — {state, app_id, url, log}
 resume(user_id)          — after the user took over: let the agent continue
 close(user_id)
-States: starting → agent (AI is filling) → waiting_you (needs the user; press Continue) → applied | closed | error
+reply(user_id, text) / add_file(user_id, name, path) — the chat: answer the AI's question or attach a file
+States: starting → agent (AI is filling) → asking (the AI asked a question in the chat) / waiting_you (captcha,
+login…: act in the window, then reply or press Continue) → applied | closed | error
 """
 
 from __future__ import annotations
@@ -31,16 +33,21 @@ def status(user_id: int) -> Dict[str, Any]:
     if not s:
         return {"state": "none"}
     page = s.get("page")
-    return {"state": s["state"], "app_id": s["app_id"], "log": s["log"][-30:],
+    return {"state": s["state"], "app_id": s["app_id"], "log": s["log"][-30:], "chat": s["chat"][-80:],
+            "question": s.get("question"), "title": s.get("title", ""),
             "url": page.url if page and s["state"] not in ("closed", "error") else ""}
 
 
+LIVE = ("starting", "agent", "asking", "waiting_you")
+
+
 def busy(user_id: int) -> bool:
-    return _sessions.get(user_id, {}).get("state") in ("starting", "agent", "waiting_you")
+    return _sessions.get(user_id, {}).get("state") in LIVE
 
 
 def start(user_id: int, app_id: int, review: bool = False) -> None:
     session: Dict[str, Any] = {"app_id": app_id, "state": "starting", "log": [], "page": None, "review": review,
+                               "chat": [], "answers": [], "files": {}, "question": None,
                                "done": asyncio.Event(), "resume": asyncio.Event(), "active": time.monotonic()}
     _sessions[user_id] = session
     session["task"] = asyncio.create_task(_run(user_id, app_id, session))
@@ -48,8 +55,36 @@ def start(user_id: int, app_id: int, review: bool = False) -> None:
 
 def resume(user_id: int) -> bool:
     s = _sessions.get(user_id)
-    if not s or s["state"] != "waiting_you":
+    if not s or s["state"] not in ("waiting_you", "asking"):
         return False
+    s["resume"].set()
+    return True
+
+
+def reply(user_id: int, text: str) -> bool:
+    """The user's chat message: the answer to the AI's question (or a note); the AI carries on with it."""
+    s = _sessions.get(user_id)
+    if not s or s["state"] not in LIVE:
+        return False
+    _chat(s, "you", text)
+    q = s.get("question")
+    s["answers"].append(f'Asked "{q}" — the candidate answered: {text}' if q else f"The candidate says: {text}")
+    s["question"] = None
+    s["resume"].set()  # a waiting AI continues; a working one reads it on its next step
+    return True
+
+
+def add_file(user_id: int, name: str, path: str) -> bool:
+    s = _sessions.get(user_id)
+    if not s or s["state"] not in LIVE:
+        return False
+    key = f"upload_{len(s['files']) + 1}"
+    s["files"][key] = path
+    _chat(s, "you", f"📎 {name}", file=name)
+    q = s.get("question")
+    s["answers"].append(f'The candidate attached the file "{name}" (upload it with file key "{key}")'
+                        + (f' for: "{q}"' if q else ""))
+    s["question"] = None
     s["resume"].set()
     return True
 
@@ -68,9 +103,15 @@ def close(user_id: int) -> None:
             _say(s, "Closed by you — nothing more will be done on this page.")
 
 
-def _say(session: Dict[str, Any], text: str) -> None:
-    session["log"].append({"time": datetime.now().strftime("%H:%M:%S"), "text": text})
+def _chat(session: Dict[str, Any], who: str, text: str, kind: str = "info", file: str = "") -> None:
+    session["chat"].append({"time": datetime.now().strftime("%H:%M:%S"), "from": who, "text": text,
+                            "kind": kind, "file": file})
     session["active"] = time.monotonic()
+
+
+def _say(session: Dict[str, Any], text: str, kind: str = "info") -> None:
+    session["log"].append({"time": datetime.now().strftime("%H:%M:%S"), "text": text})
+    _chat(session, "ai", text, kind)
 
 
 async def _run(user_id: int, app_id: int, session: Dict[str, Any]) -> None:
@@ -88,6 +129,7 @@ async def _run(user_id: int, app_id: int, session: Dict[str, Any]) -> None:
         if not app or not job or app.user_id != user_id:
             session["state"] = "error"
             return
+        session["title"] = f"{job.title} — {job.company}"
         profile = db.exec(select(Profile).where(Profile.user_id == user_id)).first()
         settings = db.exec(select(Settings).where(Settings.user_id == user_id)).first()
         user = db.get(User, user_id)
@@ -135,10 +177,16 @@ async def _run(user_id: int, app_id: int, session: Dict[str, Any]) -> None:
                                 _say(session, f"Step {step + 1}: {reason or st}")
 
                             result, note = await agent_apply(context.pages[-1], job, profile, settings, goal,
-                                                             app.cover_letter or "", cover_path, email, on_step=on_step)
+                                                             app.cover_letter or "", cover_path, email, on_step=on_step,
+                                                             answers=session["answers"], extra_files=session["files"],
+                                                             allow_ask=True)
                             page = context.pages[-1]
                             session["page"] = connections._remote[user_id]["page"] = page
-                            _say(session, note)
+                            if result == "ask":
+                                session["question"], session["state"] = note, "asking"
+                                _say(session, note, kind="question")
+                            else:
+                                _say(session, note, kind="done" if result == "applied" else "need")
                             if result == "applied":
                                 app.status, app.notes = "applied", note
                                 app.sent_to, app.applied_at = page.url, datetime.utcnow()
@@ -148,9 +196,11 @@ async def _run(user_id: int, app_id: int, session: Dict[str, Any]) -> None:
                                 session["state"] = "applied"
                                 await asyncio.sleep(4)  # let the user see the confirmation page
                                 break
-                            session["state"] = "waiting_you"
-                            _say(session, "Your turn: finish what's needed in the window, then press "
-                                          "“Continue with AI” — or “Mark as applied” if you submitted it yourself.")
+                            if result != "ask":
+                                session["state"] = "waiting_you"
+                                _say(session, "Your turn: do it in the window on the left, then reply here (or press "
+                                              "“Continue with AI”). If you submitted it yourself, press “Mark as applied”.",
+                                     kind="need")
                             session["resume"].clear()
                             deadline = time.monotonic() + _IDLE_S
                             while not session["resume"].is_set() and time.monotonic() < deadline:

@@ -1,7 +1,6 @@
 import Pagination from '../components/Pagination'
 import React, { useState, useEffect, useCallback } from 'react'
 import { getApplications, updateApplicationStatus, sendApplicationEmail, cancelApplication, retryAllApplications, assistApi } from '../api'
-import AssistBrowser from '../components/AssistBrowser'
 import { safeUrl } from '../safeUrl'
 import Spinner from '../components/Spinner'
 import StatusBadge, { CHANNELS } from '../components/StatusBadge'
@@ -197,30 +196,36 @@ export default function Applications() {
     try { localStorage.setItem('assistReview', v ? '1' : '0') } catch { /* private mode */ }
   }
 
+  // The live view opens in its own tab (big browser + chat); a tab opened right on the click isn't blocked
+  function openLive(tab) {
+    if (tab && !tab.closed) tab.location.href = '/live'
+    else window.location.href = '/live'
+  }
+
   async function fillWithAi(app) {
+    const tab = window.open('', '_blank')
     try {
       await assistApi.start(app.id, review)
-      setAssist({ appId: app.id, title: `${app.job?.title || 'Application'} — ${app.job?.company || ''}` })
-    } catch (err) { alert(`Couldn't start: ${err.message}`) }
+      openLive(tab)
+    } catch (err) { tab?.close(); alert(`Couldn't start: ${err.message}`) }
   }
 
   async function fillFromLink(e) {
     e.preventDefault()
     setLinkErr(''); setLinkBusy(true)
+    const tab = window.open('', '_blank')
     try {
-      const res = await assistApi.fromLink({ url: link.trim(), review })
-      setAssist({ appId: res.app_id, title: new URL(link.trim()).hostname })
+      await assistApi.fromLink({ url: link.trim(), review })
       setLink('')
-    } catch (err) { setLinkErr(err.message) }
+      openLive(tab)
+    } catch (err) { tab?.close(); setLinkErr(err.message) }
     finally { setLinkBusy(false) }
   }
 
-  const closeAssist = useCallback(() => { setAssist(null); loadApps() }, [loadApps])
-
-  // Coming back to this page while the AI is still filling something: reopen its live window
+  // An AI fill still running (e.g. its tab was closed): offer to open it again
   useEffect(() => {
     assistApi.status().then(s => {
-      if (['starting', 'agent', 'waiting_you'].includes(s.state)) setAssist({ appId: s.app_id, title: 'Application in progress' })
+      if (['starting', 'agent', 'asking', 'waiting_you'].includes(s.state)) setAssist({ title: s.title })
     }).catch(() => {})
   }, [])
 
@@ -275,6 +280,13 @@ export default function Applications() {
         </div>
       </div>
 
+
+      {assist && (
+        <div className="alert alert-info" role="status">
+          🤖 The AI is filling “{assist.title || 'an application'}”.{' '}
+          <a href="/live" target="_blank" rel="noreferrer">Open the live view ↗</a>
+        </div>
+      )}
 
       {/* ── Fill an application from a link ────────────────── */}
       <form className="fill-link" onSubmit={fillFromLink}>
@@ -458,7 +470,6 @@ export default function Applications() {
               </>
             )
       }
-      {assist && <AssistBrowser title={assist.title} appId={assist.appId} onClose={closeAssist} />}
     </div>
   )
 }

@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-route
 
 import Sidebar from './components/Sidebar'
 import StatusHeader from './components/StatusHeader'
+import LiveApply from './pages/LiveApply'
 import LogViewer from './components/LogViewer'
 import Login from './pages/Login'
 import Register from './pages/Register'
@@ -87,6 +88,9 @@ export default function App() {
         {/* Public */}
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
+
+        {/* Full-page live view for "Fill with AI" (opens in its own tab) */}
+        <Route path="/live" element={<PrivateRoute><LiveApply /></PrivateRoute>} />
 
         {/* Root */}
         <Route path="/" element={<RootRedirect />} />
