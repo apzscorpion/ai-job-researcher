@@ -37,6 +37,63 @@ SITES: Dict[str, Dict[str, Optional[str]]] = {
 }
 _LOGIN_WAIT_S = 15 * 60
 
+# --- Keep the app's own browsers out of the taskbar (Windows) ------------------------------------------
+# They must be real, non-headless windows (LinkedIn/Naukri end headless sessions), so they sit off-screen;
+# hiding the window as well keeps them out of the taskbar / Alt+Tab. These flags keep a hidden window rendering.
+_BACKGROUND_ARGS = ["--window-position=-32000,-32000", "--window-size=1366,900",
+                    "--disable-backgrounding-occluded-windows", "--disable-renderer-backgrounding",
+                    "--disable-features=CalculateNativeWinOcclusion"]
+_automation_pids: set = set()
+
+
+def _find_automation_pids() -> None:
+    """Chrome browser processes started by this app (they carry the off-screen position flag)."""
+    import os
+    import subprocess
+
+    if os.name != "nt":
+        return
+    script = ("Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | Where-Object { "
+              "$_.CommandLine -like '*--window-position=-32000*' -and $_.CommandLine -notlike '*--type=*' } | "
+              "ForEach-Object { $_.ProcessId }")
+    try:
+        out = subprocess.run(["powershell", "-NoProfile", "-Command", script], capture_output=True, text=True,
+                             timeout=20).stdout
+        _automation_pids.update(int(x) for x in out.split() if x.isdigit())
+    except Exception:
+        logger.info("connections: couldn't list automation browsers", exc_info=True)
+
+
+def hide_automation_windows() -> None:
+    """Hide the main windows of the app's browsers (cheap: called on every live-view frame for pop-ups)."""
+    import os
+
+    if os.name != "nt" or not _automation_pids:
+        return
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+
+    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def visit(hwnd, _):
+        pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        if pid.value in _automation_pids and user32.IsWindowVisible(hwnd):
+            cls = ctypes.create_unicode_buffer(64)
+            user32.GetClassNameW(hwnd, cls, 64)
+            if cls.value == "Chrome_WidgetWin_1":  # Chrome's own windows only, not IME/helper windows
+                user32.ShowWindow(hwnd, 0)
+        return True
+
+    user32.EnumWindows(visit, 0)
+
+
+async def _hide_new_browser() -> None:
+    await asyncio.to_thread(_find_automation_pids)
+    hide_automation_windows()
+
+
 # A browser profile can only be open once: (user_id, profile) -> lock
 _locks: Dict[tuple, asyncio.Lock] = {}
 
@@ -60,14 +117,17 @@ async def _open(p, user_id: int, profile: str, headless: bool = False, backgroun
     path.mkdir(parents=True, exist_ok=True)
     args = ["--disable-blink-features=AutomationControlled"]
     if background:
-        args += ["--window-position=-32000,-32000", "--window-size=1366,900"]
+        args += _BACKGROUND_ARGS
     kw = dict(user_data_dir=str(path), headless=headless, args=args, no_viewport=True,
               ignore_default_args=["--enable-automation"])
     try:
-        return await p.chromium.launch_persistent_context(channel="chrome", **kw)
+        context = await p.chromium.launch_persistent_context(channel="chrome", **kw)
     except Exception:
         logger.info("connections: Google Chrome not available, using bundled Chromium")
-        return await p.chromium.launch_persistent_context(**kw)
+        context = await p.chromium.launch_persistent_context(**kw)
+    if background:
+        await _hide_new_browser()
+    return context
 
 
 def _state(cookies, site: Dict[str, Optional[str]]) -> str:
@@ -212,6 +272,7 @@ async def remote_frame(user_id: int) -> Optional[bytes]:
     if not s or s["state"] != "open" or not page:
         return None
     s["active"] = time.monotonic()
+    hide_automation_windows()  # a site may have opened a new window since
     try:
         return await page.screenshot(type="jpeg", quality=60, timeout=10_000)
     except Exception:
@@ -275,14 +336,14 @@ async def fresh_browser():
     """A clean Chrome window (no saved logins) for company application pages; many can run at once."""
     from playwright.async_api import async_playwright  # type: ignore
 
-    args = ["--disable-blink-features=AutomationControlled", "--window-position=-32000,-32000",
-            "--window-size=1366,900"]
+    args = ["--disable-blink-features=AutomationControlled", *_BACKGROUND_ARGS]
     async with async_playwright() as p:
         try:
             browser = await p.chromium.launch(channel="chrome", headless=False, args=args,
                                               ignore_default_args=["--enable-automation"])
         except Exception:
             browser = await p.chromium.launch(headless=False, args=args, ignore_default_args=["--enable-automation"])
+        await _hide_new_browser()
         context = await browser.new_context(no_viewport=True)
         await context.route("**/*", _block_private)
         try:
