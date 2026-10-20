@@ -37,10 +37,16 @@ def _path(user_id: int):
     return DATA_DIR / "models" / f"scorer_{int(user_id)}.json"
 
 
+def _unit(v) -> np.ndarray:
+    """Embeddings saved earlier are unnormalised (length ~17), newer ones have length 1: compare directions only."""
+    v = np.asarray(v, dtype=float)
+    return v / (np.linalg.norm(v) + 1e-12)
+
+
 def _features(job_emb: List[float], model: Dict[str, Any], matched: int, missing: int,
               title_fit: bool, remote: bool) -> np.ndarray:
-    j = np.asarray(job_emb, dtype=float)
-    r = np.asarray(model["resume_emb"], dtype=float)
+    j = _unit(job_emb)
+    r = _unit(model["resume_emb"])
     cos = float(j @ r / (np.linalg.norm(j) * np.linalg.norm(r) + 1e-9))
     req = matched + missing
     pca = (j - np.asarray(model["emb_mean"])) @ np.asarray(model["components"]).T
@@ -120,10 +126,11 @@ async def train(user_id: int, session) -> Optional[Dict[str, Any]]:
     if len(y) < MIN_EXAMPLES:
         return None
 
-    E = np.asarray([r[0] for r in rows], dtype=float)
+    E = np.vstack([_unit(r[0]) for r in rows])
     emb_mean = E.mean(0)
     components = np.linalg.svd(E - emb_mean, full_matrices=False)[2][:_PCA_DIMS]
-    model: Dict[str, Any] = {"resume_emb": resume_emb, "emb_mean": emb_mean.tolist(), "components": components.tolist()}
+    model: Dict[str, Any] = {"resume_emb": resume_emb, "emb_mean": emb_mean.tolist(), "components": components.tolist(),
+                             "unit": True}
     X = np.vstack([_features(r[0], model, *r[1:]) for r in rows])
     y_arr = np.asarray(y)
     lam = min(_LAMBDAS, key=lambda lam_: _cv_mae(X, y_arr, lam_))
@@ -153,7 +160,7 @@ def load(user_id: int) -> Optional[Dict[str, Any]]:
         model = json.loads(path.read_text())
     except ValueError:
         return None
-    return model if "cal_x" in model else None  # older format: retrain
+    return model if model.get("unit") else None  # older format: retrain
 
 
 def predict(model: Dict[str, Any], job_emb: List[float], matched: int, missing: int,

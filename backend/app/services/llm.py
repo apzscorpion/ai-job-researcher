@@ -68,14 +68,17 @@ async def embed(text: str, model: str, url: str) -> List[float]:
     """
     if not text.strip():
         return []
-    payload: Dict[str, Any] = {"model": model, "prompt": text}
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post(f"{url}/api/embeddings", json=payload)
+            # /api/embed trims text longer than the model's context (some job posts are), instead of failing
+            resp = await client.post(f"{url}/api/embed", json={"model": model, "input": text, "truncate": True})
+            if resp.status_code == 404:  # older Ollama: the previous endpoint, with the text shortened by hand
+                resp = await client.post(f"{url}/api/embeddings", json={"model": model, "prompt": text[:2000]})
+                resp.raise_for_status()
+                return [float(v) for v in resp.json().get("embedding", [])]
             resp.raise_for_status()
-            data = resp.json()
-            embedding = data.get("embedding", [])
-            return [float(v) for v in embedding]
+            embeddings = resp.json().get("embeddings") or [[]]
+            return [float(v) for v in embeddings[0]]
     except httpx.HTTPError as exc:
         logger.warning("ollama.embed HTTP error: %s", exc)
         return []
