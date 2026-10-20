@@ -163,6 +163,16 @@ export async function connectJobSite(site, remote = false) {
   return apiFetch(`/settings/job-sites/${site}/connect${remote ? '?remote=true' : ''}`, { method: 'POST' })
 }
 
+// "Fill with AI": the agent fills an application in a live window you can step into
+export const assistApi = {
+  start:       (appId, review) => apiFetch(`/applications/${appId}/assist?review=${review ? 'true' : 'false'}`, { method: 'POST' }),
+  fromLink:    body  => apiFetch('/applications/from-link', { method: 'POST', body: JSON.stringify(body) }),
+  status:      ()    => apiFetch('/applications/assist/status'),
+  resume:      ()    => apiFetch('/applications/assist/continue', { method: 'POST' }),
+  close:       ()    => apiFetch('/applications/assist/close', { method: 'POST' }),
+  markApplied: appId => apiFetch(`/applications/${appId}/mark-applied`, { method: 'POST' }),
+}
+
 // Sign-in window that runs on the host and is shown inside the website
 export const remoteSignIn = {
   status: () => apiFetch('/settings/job-sites/remote/status'),

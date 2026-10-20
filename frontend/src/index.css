@@ -1086,3 +1086,11 @@ input[type="range"] {
 .ai-mode-on .ai-mode-title::before { content: '● '; color: #2563eb; }
 .ai-mode-tag { font-size: 0.72rem; color: #2563eb; font-weight: 600; }
 .ai-mode-text { font-size: 0.8rem; color: #475569; line-height: 1.45; }
+
+.assist-state { font-size: 0.88rem; padding: 0.5rem 0.75rem; border-radius: 6px; margin-bottom: 0.5rem; background: #eff6ff; color: #1e3a8a; }
+.assist-waiting_you { background: #fffbeb; color: #92400e; }
+.assist-applied { background: #f0fdf4; color: #166534; }
+.assist-error { background: #fef2f2; color: #991b1b; }
+.assist-log { list-style: none; margin: 0.5rem 0 0; padding: 0; font-size: 0.78rem; color: #334155; display: grid; gap: 0.15rem; max-height: 9rem; overflow-y: auto; }
+.assist-log span { color: #94a3b8; margin-right: 0.4rem; font-variant-numeric: tabular-nums; }
+.fill-link { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; margin-bottom: 1rem; }

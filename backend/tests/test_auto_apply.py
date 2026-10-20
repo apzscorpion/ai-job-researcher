@@ -233,3 +233,26 @@ def test_agent_plan_parsing_accepts_object_list_and_fences():
     plan = _parse_plan('```json\n[{"type": "click", "id": "f0e1"}]\n```')
     assert plan["status"] == "continue" and plan["actions"][0]["id"] == "f0e1"
     assert _parse_plan("I cannot help with that") == {}
+
+
+def test_assist_close_stops_a_running_fill():
+    import asyncio
+
+    from app.services import assist
+
+    async def scenario():
+        async def never_ending():
+            await asyncio.sleep(3600)  # stands in for the AI mid-form
+
+        s = {"app_id": 1, "state": "agent", "log": [], "page": None, "review": False,
+             "done": asyncio.Event(), "resume": asyncio.Event(), "active": 0}
+        s["task"] = asyncio.create_task(never_ending())
+        assist._sessions[999] = s
+        await asyncio.sleep(0)
+        assist.close(999)
+        await asyncio.sleep(0)
+        return s["task"].cancelled(), s["state"]
+
+    cancelled, state = asyncio.run(scenario())
+    assert cancelled and state == "closed"
+    assist._sessions.pop(999, None)

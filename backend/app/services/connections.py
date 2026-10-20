@@ -148,7 +148,8 @@ def remote_status(user_id: int) -> Dict[str, Any]:
     if not s:
         return {"state": "none"}
     page = s.get("page")
-    return {"state": s["state"], "site": s["site"], "name": SITES[s["site"]]["name"],
+    name = SITES[s["site"]]["name"] if s["site"] in SITES else "Application"
+    return {"state": s["state"], "site": s["site"], "name": name,
             "url": page.url if page and s["state"] == "open" else ""}
 
 

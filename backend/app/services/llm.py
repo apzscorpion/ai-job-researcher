@@ -177,7 +177,7 @@ async def _generate(client, **kwargs):
     """generate_content with short retries: Gemini often returns 503 "high demand" for a few seconds."""
     from google.genai import errors  # type: ignore
 
-    for delay in (2, 6):
+    for delay in (1,):  # one quick retry, then the caller moves on to the next model (faster than waiting)
         try:
             return await asyncio.to_thread(client.models.generate_content, **kwargs)
         except errors.ServerError as exc:

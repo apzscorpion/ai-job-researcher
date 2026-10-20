@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlmodel import Session, col, func, or_, select
 
 from app.auth import get_current_user
@@ -145,6 +145,125 @@ def list_applications(
 # ---------------------------------------------------------------------------
 # GET /{app_id}
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Fill with AI: the agent fills the application page while the user watches live (and can step in)
+# ---------------------------------------------------------------------------
+
+def _start_assist(user: User, app: Application, review: bool = False) -> Dict[str, Any]:
+    from app.security import rate_limit
+    from app.services import assist, connections
+
+    rate_limit(f"assist:{user.id}", 20, 3600, "That's a lot of AI fills for one hour — try again later")
+    if assist.busy(user.id) or connections._remote.get(user.id, {}).get("state") == "open":
+        raise HTTPException(status_code=409, detail="A live window is already open — finish or close it first")
+    if app.status in ("applied", "replied", "applying"):
+        raise HTTPException(status_code=409, detail=f"Already {app.status}")
+    assist.start(user.id, app.id, review)
+    return {"started": True, "app_id": app.id, "review": review}
+
+
+@router.post("/{app_id}/assist")
+async def start_assist(
+    app_id: int,
+    review: bool = False,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+) -> Dict[str, Any]:
+    app = session.get(Application, app_id)
+    if not app or app.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Application not found")
+    return _start_assist(current_user, app, review)
+
+
+class LinkBody(BaseModel):
+    review: bool = False  # fill everything but leave the final Submit to the user
+    url: str = Field(..., min_length=8, max_length=2000)
+    title: str = Field("", max_length=200)
+    company: str = Field("", max_length=200)
+
+
+@router.post("/from-link")
+async def apply_from_link(
+    body: LinkBody,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+) -> Dict[str, Any]:
+    """Any job / application URL: add it and let the AI fill the application live."""
+    from urllib.parse import urlparse
+
+    from app.security import check_public_url, http_url_or_none
+
+    url = body.url.strip()
+    try:
+        check_public_url(url, ("https", "http"))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Link: {exc}")
+    host = urlparse(url).netloc.removeprefix("www.")
+    job = session.exec(select(Job).where(Job.user_id == current_user.id, Job.url == url)).first()
+    if not job:
+        job = Job(user_id=current_user.id, url=url, apply_url=http_url_or_none(url), source="link",
+                  title=body.title.strip() or f"Application at {host}", company=body.company.strip() or host,
+                  description="", status="scored")
+        session.add(job)
+        session.commit()
+        session.refresh(job)
+    app = session.exec(select(Application).where(Application.user_id == current_user.id,
+                                                 Application.job_id == job.id)).first()
+    if not app:
+        app = Application(user_id=current_user.id, job_id=job.id, method="site", status="needs_manual",
+                          notes="Added from a link — the AI fills it while you watch.", applied_at=datetime.utcnow())
+        session.add(app)
+        session.commit()
+        session.refresh(app)
+    return _start_assist(current_user, app, body.review)
+
+
+@router.get("/assist/status")
+def assist_status(current_user: User = Depends(get_current_user)) -> Dict[str, Any]:
+    from app.services import assist
+
+    return assist.status(current_user.id)
+
+
+@router.post("/assist/continue")
+def assist_continue(current_user: User = Depends(get_current_user)) -> Dict[str, bool]:
+    from app.services import assist
+
+    if not assist.resume(current_user.id):
+        raise HTTPException(status_code=409, detail="The AI isn't waiting for you right now")
+    return {"ok": True}
+
+
+@router.post("/assist/close")
+def assist_close(current_user: User = Depends(get_current_user)) -> Dict[str, bool]:
+    from app.services import assist
+
+    assist.close(current_user.id)
+    return {"closed": True}
+
+
+@router.post("/{app_id}/mark-applied")
+def mark_applied(
+    app_id: int,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+) -> Dict[str, Any]:
+    """The user submitted it themselves (e.g. after a captcha): record it as applied."""
+    from app.services import assist
+
+    app = session.get(Application, app_id)
+    if not app or app.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Application not found")
+    st = assist.status(current_user.id)
+    app.status, app.applied_at = "applied", datetime.utcnow()
+    app.notes = "Marked as applied by you" + (f" ({st['url']})" if st.get("app_id") == app_id and st.get("url") else ".")
+    session.add(app)
+    session.commit()
+    if st.get("app_id") == app_id:
+        assist.close(current_user.id)
+    return {"applied": app_id}
+
 
 @router.get("/{app_id}")
 def get_application(

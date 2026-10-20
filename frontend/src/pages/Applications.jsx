@@ -1,6 +1,7 @@
 import Pagination from '../components/Pagination'
 import React, { useState, useEffect, useCallback } from 'react'
-import { getApplications, updateApplicationStatus, sendApplicationEmail, cancelApplication, retryAllApplications } from '../api'
+import { getApplications, updateApplicationStatus, sendApplicationEmail, cancelApplication, retryAllApplications, assistApi } from '../api'
+import AssistBrowser from '../components/AssistBrowser'
 import { safeUrl } from '../safeUrl'
 import Spinner from '../components/Spinner'
 import StatusBadge, { CHANNELS } from '../components/StatusBadge'
@@ -184,6 +185,45 @@ export default function Applications() {
     }
   }
 
+  // "Fill with AI": live window where the agent fills the application (you can step in)
+  const [assist, setAssist]   = useState(null)   // { appId, title }
+  const [link, setLink]       = useState('')
+  const [linkErr, setLinkErr] = useState('')
+  const [linkBusy, setLinkBusy] = useState(false)
+  // Fill everything but leave the final Submit to you (remembered on this device)
+  const [review, setReview] = useState(() => { try { return localStorage.getItem('assistReview') === '1' } catch { return false } })
+  function toggleReview(v) {
+    setReview(v)
+    try { localStorage.setItem('assistReview', v ? '1' : '0') } catch { /* private mode */ }
+  }
+
+  async function fillWithAi(app) {
+    try {
+      await assistApi.start(app.id, review)
+      setAssist({ appId: app.id, title: `${app.job?.title || 'Application'} — ${app.job?.company || ''}` })
+    } catch (err) { alert(`Couldn't start: ${err.message}`) }
+  }
+
+  async function fillFromLink(e) {
+    e.preventDefault()
+    setLinkErr(''); setLinkBusy(true)
+    try {
+      const res = await assistApi.fromLink({ url: link.trim(), review })
+      setAssist({ appId: res.app_id, title: new URL(link.trim()).hostname })
+      setLink('')
+    } catch (err) { setLinkErr(err.message) }
+    finally { setLinkBusy(false) }
+  }
+
+  const closeAssist = useCallback(() => { setAssist(null); loadApps() }, [loadApps])
+
+  // Coming back to this page while the AI is still filling something: reopen its live window
+  useEffect(() => {
+    assistApi.status().then(s => {
+      if (['starting', 'agent', 'waiting_you'].includes(s.state)) setAssist({ appId: s.app_id, title: 'Application in progress' })
+    }).catch(() => {})
+  }, [])
+
   async function handleRetryAll() {
     if (!window.confirm('Re-apply to everything not sent yet (queued, needs you, failed, drafts)? ' +
                         'Each gets a fresh formal cover letter and goes out automatically, one at a time.')) return
@@ -235,6 +275,21 @@ export default function Applications() {
         </div>
       </div>
 
+
+      {/* ── Fill an application from a link ────────────────── */}
+      <form className="fill-link" onSubmit={fillFromLink}>
+        <input className="form-control" type="url" required aria-label="Application link" style={{ flex: '1 1 380px' }}
+          placeholder="Paste any job or application link (Greenhouse, Lever, Workday, company careers page…)"
+          value={link} onChange={e => setLink(e.target.value)} />
+        <button className="btn btn-primary btn-sm" disabled={linkBusy || !link.trim()}>
+          {linkBusy ? 'Opening…' : '🤖 Fill with AI'}
+        </button>
+        <label style={{ display: 'inline-flex', gap: '0.35rem', alignItems: 'center', fontSize: '0.82rem' }}>
+          <input type="checkbox" checked={review} onChange={e => toggleReview(e.target.checked)} />
+          Stop before Submit so I can review
+        </label>
+        {linkErr && <span style={{ color: '#b91c1c', fontSize: '0.82rem' }}>⚠️ {linkErr}</span>}
+      </form>
 
       {/* ── Filters ──────────────────────────────────────── */}
       <div className="filters-bar">
@@ -374,6 +429,13 @@ export default function Applications() {
                                   ))}
                                 </select>
                                 {!['applied', 'replied', 'applying'].includes(app.status) && (
+                                  <button className="btn btn-primary btn-sm" style={{ marginTop: '0.3rem', marginRight: '0.3rem' }}
+                                    onClick={() => fillWithAi(app)}
+                                    title="The AI fills this application in a live window you can watch and step into">
+                                    🤖 Fill with AI
+                                  </button>
+                                )}
+                                {!['applied', 'replied', 'applying'].includes(app.status) && (
                                   <button className="btn btn-secondary btn-sm" style={{ marginTop: '0.3rem' }}
                                     disabled={isUpdating} onClick={() => handleCancel(app)}
                                     title="Not sent yet: remove it so it never goes out">
@@ -396,6 +458,7 @@ export default function Applications() {
               </>
             )
       }
+      {assist && <AssistBrowser title={assist.title} appId={assist.appId} onClose={closeAssist} />}
     </div>
   )
 }

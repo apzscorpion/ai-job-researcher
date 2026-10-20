@@ -171,6 +171,9 @@ def _candidate(profile: Profile, settings: Settings, email: str, cover_letter: s
         "full_name": profile.name, "first_name": name[0] if name else "", "last_name": " ".join(name[1:]),
         "email": email, "phone": profile.phone, "location": profile.location, "linkedin": profile.linkedin_url,
         "total_years_experience": profile.total_years, "skills": selected_skills(profile)[:30],
+        # forms ask for these field by field (school, degree, discipline, employer, title, dates)
+        "education": json_decode(profile.parsed_education, []) or [],
+        "work_history": json_decode(profile.parsed_experience, []) or [],
         "standard_answers": answers, "cover_letter_available": bool(cover_letter),
     }, ensure_ascii=False)
 
@@ -189,7 +192,7 @@ Candidate data (use exactly; never invent personal facts):
 {candidate}
 
 <resume>
-{resume[:2500]}
+{resume[:6000]}
 </resume>
 <cover_letter>
 {cover_letter[:1500]}
@@ -204,6 +207,10 @@ How to work:
   how did you hear: "{source}"; demographic questions: "Prefer not to say"/"Decline").
 - Salary (current or expected), notice period in days and other figures: ONLY from standard_answers. If a
   required one is missing there, STOP with "need_human" and name the question — never guess a number.
+- Location / city autocompletes: type the candidate's city; if the list doesn't offer it, choose the
+  nearest larger city that is listed in the same state/country (e.g. a district town → the state's main city).
+- Education and employment questions: use the "education" and "work_history" data (school, degree,
+  discipline/major, dates, employer, title). Use the résumé text if those are empty.
 - Upload files with {{"type":"upload","id":..,"file":"resume"}} or "cover_letter" on file inputs.
 - Submit when everything required is filled.
 - STOP with status "need_human" for: captcha or "verify you are human", login or account creation /
@@ -262,7 +269,8 @@ async def _act(page, frames: Dict[str, Any], action: Dict[str, Any], files: Dict
 
 
 async def agent_apply(page, job: Job, profile: Profile, settings: Settings, goal: str,
-                      cover_letter: str = "", cover_letter_path: str = "", email: str = "") -> Tuple[str, str]:
+                      cover_letter: str = "", cover_letter_path: str = "", email: str = "",
+                      on_step=None) -> Tuple[str, str]:
     files = {"resume": profile.resume_path or "", "cover_letter": cover_letter_path}
     history: List[str] = []
     claimed = False
@@ -288,6 +296,8 @@ async def agent_apply(page, job: Job, profile: Profile, settings: Settings, goal
             return "needs_manual", f"The AI agent got no usable reply (AI quota?). Finish it here: {page.url}"
         status, reason = plan.get("status", "continue"), str(plan.get("reason", ""))[:200]
         logger.info("agent_apply: job_id=%s step=%s status=%s reason=%s (%s)", job.id, step, status, reason, used)
+        if on_step:
+            on_step(step, status, reason)
         if status == "applied":
             # trust the page, not the model: look for the site's own confirmation
             await asyncio.sleep(3)
