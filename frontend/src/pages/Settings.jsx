@@ -6,7 +6,7 @@ import {
 import Spinner from '../components/Spinner'
 import KeyField from '../components/KeyField'
 import RemoteBrowser from '../components/RemoteBrowser'
-import LocalModelCard from '../components/LocalModelCard'
+import AiModePicker from '../components/AiModePicker'
 
 // ---------------------------------------------------------------------------
 // Helper toggle
@@ -101,6 +101,7 @@ export default function Settings() {
   const [syncing, setSyncing]             = useState(false)
   const [connectingPlatform, setConnectingPlatform] = useState(null)
   const [remoteSite, setRemoteSite]       = useState(null)
+  const [aiMode, setAiMode]               = useState('semi_ai')
   const [connectMsg, setConnectMsg]   = useState('')
   const [connectErr, setConnectErr]   = useState('')
 
@@ -141,6 +142,7 @@ export default function Settings() {
       })
       // AI
       setProviders(data.ai_providers || [])
+      setAiMode(data.ai_mode || 'semi_ai')
       setAnswers(data.standard_answers || {})
       // Prefs
       setPrefs({
@@ -299,7 +301,6 @@ export default function Settings() {
         apply_start_hour:      Number(prefs.apply_start_hour),
         apply_end_hour:        Number(prefs.apply_end_hour),
         search_interval_hours: Number(prefs.search_interval_hours),
-        use_gemini_scoring:    prefs.use_gemini_scoring,
         auto_apply_enabled:    prefs.auto_apply_enabled,
         timezone:              prefs.timezone,
       })
@@ -361,6 +362,15 @@ export default function Settings() {
       <div className="page-header">
         <h1 className="page-title">Settings</h1>
       </div>
+
+      {/* ── AI mode ──────────────────────────────────────── */}
+      <Section title="AI mode" icon="🧠">
+        <p className="form-hint" style={{ marginBottom: '0.75rem' }}>
+          Choose how much work goes to your cloud AI keys and how much runs on this computer's own models.
+          Saved as soon as you pick one.
+        </p>
+        <AiModePicker mode={aiMode} onChange={setAiMode} />
+      </Section>
 
       {/* ── SMTP ─────────────────────────────────────────── */}
       <Section title="Email sending (SMTP)" icon="📧">
@@ -605,10 +615,8 @@ export default function Settings() {
           </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1.25rem', marginBottom: '1rem' }}>
             <Toggle label="Search remote jobs worldwide (priority)" checked={prefs.remote_ok}           onChange={v => setPrefs(p => ({ ...p, remote_ok: v }))} />
-            <Toggle label="Score jobs with cloud AI (off = your local trained model, no quota)" checked={prefs.use_gemini_scoring} onChange={v => setPrefs(p => ({ ...p, use_gemini_scoring: v }))} />
             <Toggle label="Auto-Apply Enabled"   checked={prefs.auto_apply_enabled}  onChange={v => setPrefs(p => ({ ...p, auto_apply_enabled: v }))} />
           </div>
-          <LocalModelCard cloudScoring={prefs.use_gemini_scoring} />
           <button type="submit" className="btn btn-primary" disabled={prefSaving}>
             {prefSaving ? <><Spinner size="sm" /> Saving…</> : '💾 Save Preferences'}
           </button>

@@ -494,6 +494,18 @@ async def _process_apply_queue() -> None:
                 logger.info("scheduler: user_id=%s started %s", user_id, [(a.id, g) for a, _r, g in chosen])
 
 
+async def _recheck_borderline() -> None:
+    """Keep the local LLM busy on borderline jobs, one at a time (a run lasts ~2-3 min per job)."""
+    from app.services.matcher import recheck_borderline
+
+    try:
+        for _ in range(3):
+            if not await recheck_borderline():
+                break
+    except Exception:
+        logger.exception("scheduler: borderline re-check failed")
+
+
 def _group(job, route: str) -> str:
     """Platform an application runs on; one at a time per platform, different platforms in parallel."""
     from urllib.parse import urlparse
@@ -541,6 +553,16 @@ def start_scheduler() -> None:
             replace_existing=True,
             misfire_grace_time=300,
             next_run_time=datetime.now() + timedelta(minutes=1),  # first check soon after startup
+        )
+
+        _scheduler.add_job(
+            _recheck_borderline,
+            trigger=IntervalTrigger(minutes=2),
+            id="recheck_job",
+            name="Local-LLM re-check of borderline scores",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
         )
 
         _scheduler.add_job(

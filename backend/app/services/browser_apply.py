@@ -65,7 +65,7 @@ async def answer_question(question: str, profile: Profile, settings: Settings,
     With *options*, returns one of them verbatim. "" when the facts do not answer it.
     """
     from app.models import json_decode
-    from app.services.llm import generate, providers_for
+    from app.services.llm import generate, local_first, providers_for
 
     answers = json_decode(settings.standard_answers, {}) or {}
     known = "\n".join(f"- {k.replace('_', ' ')}: {v}" for k, v in answers.items() if str(v).strip())
@@ -103,7 +103,8 @@ Location: {profile.location or "see résumé"}
 </resume>
 
 Form question: {question}{choose}"""
-    text, _ = await generate(prompt, providers_for(settings), OLLAMA_MODEL, OLLAMA_URL, light=True)
+    text, _ = await generate(prompt, providers_for(settings), OLLAMA_MODEL, OLLAMA_URL, light=True,
+                             prefer_local=local_first(settings))
     answer = (text or "").strip().strip('"').strip()
     if not answer or "UNKNOWN" in answer.upper():
         return ""

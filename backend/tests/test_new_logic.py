@@ -196,3 +196,21 @@ def test_local_scorer_learns_a_simple_pattern():
     w, b, mu, sd = L._fit(X, y, 0.1)
     full = {**model, "w": w.tolist(), "b": b, "mu": mu.tolist(), "sd": sd.tolist(), "cal_x": [0, 10], "cal_y": [0, 10]}
     assert abs(L.predict(full, E[0].tolist(), int(matched[0]), 2, True, False) - y[0]) < 0.5
+
+
+def test_ai_modes_route_work_between_cloud_and_local():
+    from types import SimpleNamespace
+
+    from app.services import llm
+
+    def settings(mode, scoring=False):
+        return SimpleNamespace(ai_mode=mode, use_gemini_scoring=scoring, gemini_key_enc=None, ai_providers_enc=None)
+
+    assert llm.ai_mode(settings(None, True)) == "full_ai" and llm.ai_mode(settings(None)) == "semi_ai"
+    assert llm.local_first(settings("local_plus_ai")) and not llm.local_first(settings("semi_ai"))
+    real = llm.providers_for
+    try:
+        llm.providers_for = lambda s: real(s)
+        assert llm.providers_for(settings("local_only")) == []
+    finally:
+        llm.providers_for = real

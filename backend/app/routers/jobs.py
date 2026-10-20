@@ -307,7 +307,12 @@ async def resume_report(
     from app.services import matcher
 
     job, profile, providers, jd_source = await _ai_context(job_id, current_user.id, session)
-    report, used = await matcher.resume_report(job, profile.resume_text, providers, OLLAMA_URL, OLLAMA_MODEL)
+    from app.models import Settings
+    from app.services.llm import local_first
+
+    st = session.exec(select(Settings).where(Settings.user_id == current_user.id)).first()
+    report, used = await matcher.resume_report(job, profile.resume_text, providers, OLLAMA_URL, OLLAMA_MODEL,
+                                               prefer_local=bool(st and local_first(st)))
     if not report:
         raise HTTPException(status_code=502, detail=_NO_AI)
     return {"report": report, "jd_source": jd_source, "model": used}

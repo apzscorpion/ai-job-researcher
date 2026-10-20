@@ -328,7 +328,7 @@ def stats_today(
     from app.services.llm import providers_for
     from collections import Counter
 
-    from app.services.llm import quota_status
+    from app.services.llm import ai_mode, quota_status
     from app.services.scheduler import PLATFORM_DAILY_CAP, active_pauses, route_for
 
     now = datetime.now(timezone.utc)
@@ -364,6 +364,7 @@ def stats_today(
             "paused": active_pauses(settings.platform_pauses if settings else None, now),
             # queued jobs per channel, so the UI can say "30 jobs are waiting for LinkedIn"
             "ai_quota": quota_status(settings) if settings else [],
+            "ai_mode": ai_mode(settings) if settings else "semi_ai",
             # applications attempted today per platform, for "LinkedIn 7/15 today"
             "platform_today": {p: count(attempted, today, Application.method == p) for p in PLATFORM_DAILY_CAP},
             "queued_by_route": dict(Counter(route_for(j) for j in session.exec(

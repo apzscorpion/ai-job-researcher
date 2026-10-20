@@ -1,4 +1,4 @@
-﻿"""
+"""
 Job matching service: hard filtering, skill-gap analysis and LLM-based scoring.
 
 hard_filter(job, settings) -> bool
@@ -309,14 +309,15 @@ Write GitHub Markdown with exactly these sections:
 
 
 async def resume_report(job: Job, resume_text: str, providers: List[Dict[str, str]],
-                        ollama_url: str, ollama_model: str) -> Tuple[str, str]:
+                        ollama_url: str, ollama_model: str, prefer_local: bool = False) -> Tuple[str, str]:
     """(Markdown brief for tailoring the résumé to *job*, model used); "" when no LLM replied."""
     from app.services import llm
 
     _, missing = skill_gap(resume_text, f"{job.title}\n{job.description or ''}")
     prompt = _build_report_prompt(resume_text, job, missing)
     # Local CPU model needs several minutes for a report this long
-    analysis, used = await llm.generate(prompt, providers, ollama_model, ollama_url, timeout=900.0)
+    analysis, used = await llm.generate(prompt, providers, ollama_model, ollama_url, timeout=900.0,
+                                        prefer_local=prefer_local)
     analysis = re.sub(r"^```(?:markdown)?\s*|\s*```$", "", (analysis or "").strip())
     if not analysis:
         return "", used
@@ -359,6 +360,95 @@ def queue_matches(user_id: int, threshold: float, session: Session) -> int:
         session.add(Application(user_id=user_id, job_id=job.id, method="pending",
                                 status="queued", applied_at=datetime.utcnow()))
     return len(jobs)
+
+
+def _skill_check(score: float, reason: str, tips: List[str], skills: List[str], job: Job):
+    """Cap over-optimistic scores when the job's required skills are mostly missing; add a résumé tip."""
+    matched, missing = skill_match(skills, f"{job.title}\n{job.description or ''}")
+    required = len(matched) + len(missing)
+    if required:
+        reason = f"{reason} (Skills matched {len(matched)}/{required})"
+        if required >= 3 and len(matched) / required < _MIN_COVERAGE and score > _LOW_COVERAGE_CAP:
+            score = _LOW_COVERAGE_CAP
+    if missing:
+        tips = [f"If you have experience with {', '.join(missing[:6])}, add it to your résumé."] + tips
+    return score, reason, tips
+
+
+# Quick local scores in this band are close to the apply line; the local LLM double-checks them
+RECHECK_BAND = (5.5, 8.5)
+
+
+async def recheck_borderline() -> bool:
+    """Re-score ONE borderline job (any user in local-scoring mode) with the local LLM. True if one was done.
+
+    Runs in the background, one at a time: qwen3:4b needs ~2-3 minutes a job on this CPU, but it matched
+    the cloud AI on real jobs. Its score replaces the quick one, can queue or un-queue the job, adds résumé
+    tips, and becomes a free training example for the user's scorer.
+    """
+    from sqlmodel import col
+
+    from app.config import OLLAMA_MODEL, OLLAMA_URL
+    from app.db import engine
+    from app.services import llm, local_scorer
+
+    with Session(engine) as session:
+        row = session.exec(
+            select(Job, Settings).join(Settings, Settings.user_id == Job.user_id)
+            .where(Job.status == "scored", Job.score_source == "local", Settings.use_gemini_scoring == False,  # noqa: E712
+                   col(Job.score) >= RECHECK_BAND[0], col(Job.score) <= RECHECK_BAND[1])
+            .order_by(col(Job.found_at).desc())).first()
+        if not row:
+            return False
+        job, settings = row
+        profile = session.exec(select(Profile).where(Profile.user_id == job.user_id)).first()
+        if not profile or not profile.resume_text:
+            job.score_source = "local_nocheck"
+            session.add(job)
+            session.commit()
+            return True
+        skills = selected_skills(profile)
+        prompt = _build_score_prompt(profile.resume_text, job, profile.location or "", settings, skills)
+        raw, _ = await llm.generate(prompt, [], OLLAMA_MODEL, OLLAMA_URL, json_mode=True, timeout=600)
+        result = parse_score_response(raw) if raw else None
+        if result is None:
+            logger.warning("recheck: no usable local-LLM score for job_id=%s", job.id)
+            job.score_source = "local_nocheck"  # don't retry it forever
+            session.add(job)
+            session.commit()
+            return True
+
+        score, reason, tips = _skill_check(*result, skills, job)
+        threshold = settings.score_threshold
+        job.quick_score, job.score = job.score, score
+        job.score_source = "local_llm"
+        job.score_reason = f"{reason} — re-checked on this computer by the local AI (quick score was {job.quick_score})."
+        job.resume_tips = json_encode(tips) if tips else None
+        session.add(job)
+        app = session.exec(select(Application).where(Application.user_id == job.user_id,
+                                                     Application.job_id == job.id)).first()
+        if score >= threshold and settings.auto_apply_enabled:
+            queue_matches(job.user_id, threshold, session)
+        elif app and app.status == "queued" and not app.notes:
+            session.delete(app)  # was queued only because of the quick score; never removes jobs the user picked
+        session.commit()
+        logger.info("recheck: job_id=%s quick %.1f -> local LLM %.1f (threshold %s)", job.id, job.quick_score, score, threshold)
+
+        checked = session.exec(select(Job).where(Job.user_id == job.user_id, Job.score_source == "local_llm")).all()
+        if len(checked) % 10 == 0:
+            await local_scorer.train(job.user_id, session)
+    return True
+
+
+def recheck_stats(user_id: int, threshold: float, session: Session) -> Dict[str, Any]:
+    from sqlmodel import col
+
+    done = session.exec(select(Job).where(Job.user_id == user_id, Job.score_source == "local_llm")).all()
+    waiting = session.exec(select(Job).where(
+        Job.user_id == user_id, Job.status == "scored", Job.score_source == "local",
+        col(Job.score) >= RECHECK_BAND[0], col(Job.score) <= RECHECK_BAND[1])).all()
+    changed = sum(1 for j in done if j.quick_score is not None and (j.quick_score >= threshold) != (j.score >= threshold))
+    return {"rechecked": len(done), "changed_decision": changed, "waiting": len(waiting)}
 
 
 async def score_jobs(
@@ -455,14 +545,7 @@ async def score_jobs(
             source = "ai"
 
         # 4. Deterministic skill check against the selected skills — caps over-optimistic LLM scores
-        matched, missing = skill_match(skills, f"{job.title}\n{job.description or ''}")
-        required = len(matched) + len(missing)
-        if required:
-            reason = f"{reason} (Skills matched {len(matched)}/{required})"
-            if required >= 3 and len(matched) / required < _MIN_COVERAGE and score > _LOW_COVERAGE_CAP:
-                score = _LOW_COVERAGE_CAP
-        if missing:
-            tips = [f"If you have experience with {', '.join(missing[:6])}, add it to your résumé."] + tips
+        score, reason, tips = _skill_check(score, reason, tips, skills, job)
 
         job.score = score
         job.score_source = source

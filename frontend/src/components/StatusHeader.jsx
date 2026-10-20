@@ -59,7 +59,9 @@ export default function StatusHeader() {
           </Chip>
         )
       })}
-      {ai.length === 0
+      {r.ai_mode === 'local_only'
+        ? <Chip tone="ok" title="Settings → AI mode: nothing is sent to cloud AI">🖥 Only local models</Chip>
+        : ai.length === 0
         ? <Chip tone="bad" title="Add a key in Settings">🤖 No cloud AI key — only the slow local model</Chip>
         : aiOut.length === ai.length
           ? <Chip tone="bad" title="Every cloud provider is out of quota; the local model is used (slow)">

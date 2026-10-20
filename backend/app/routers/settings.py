@@ -19,6 +19,7 @@ from app import crypto
 from app.db import get_session
 from app.models import Settings, User, json_decode, json_encode
 from app.security import check_public_host, check_public_url
+from app.services.llm import ai_mode
 from app.services.scheduler import user_tz
 
 Short = Annotated[str, Field(max_length=200)]
@@ -120,6 +121,7 @@ def _settings_to_dict(s: Settings) -> Dict[str, Any]:
         "partial_skills_ok": s.partial_skills_ok,
         "score_threshold": s.score_threshold,
         "use_gemini_scoring": s.use_gemini_scoring,
+        "ai_mode": ai_mode(s),
         "daily_cap": s.daily_cap,
         "apply_start_hour": s.apply_start_hour,
         "apply_end_hour": s.apply_end_hour,
@@ -172,6 +174,7 @@ class SettingsUpdate(BaseModel):
     partial_skills_ok: Optional[bool] = None
     score_threshold: Optional[Annotated[int, Field(ge=0, le=10)]] = None
     use_gemini_scoring: Optional[bool] = None
+    ai_mode: Optional[Literal["full_ai", "semi_ai", "local_plus_ai", "local_only"]] = None
     daily_cap: Optional[Annotated[int, Field(ge=0, le=100)]] = None
     apply_start_hour: Optional[Annotated[int, Field(ge=0, le=23)]] = None
     apply_end_hour: Optional[Annotated[int, Field(ge=1, le=24)]] = None
@@ -242,6 +245,12 @@ def update_settings(
         s.score_threshold = body.score_threshold
     if body.use_gemini_scoring is not None:
         s.use_gemini_scoring = body.use_gemini_scoring
+        if body.ai_mode is None:  # the old scoring toggle: switch between full and semi, keep the local modes
+            s.ai_mode = "full_ai" if body.use_gemini_scoring else (
+                s.ai_mode if s.ai_mode in ("local_plus_ai", "local_only") else "semi_ai")
+    if body.ai_mode is not None:
+        s.ai_mode = body.ai_mode
+        s.use_gemini_scoring = body.ai_mode == "full_ai"  # only full AI scores jobs with cloud keys
     if body.daily_cap is not None:
         s.daily_cap = body.daily_cap
     if body.apply_start_hour is not None:
@@ -295,11 +304,17 @@ def _stored_key(s: Settings, key_id: str) -> str:
 
 
 @router.get("/local-model")
-def local_model(current_user: User = Depends(get_current_user)) -> Dict[str, Any]:
-    """This user's own trained job scorer (None until enough jobs have been AI-scored)."""
+def local_model(
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+) -> Dict[str, Any]:
+    """This user's own trained job scorer (None until enough jobs have been AI-scored) and its re-checks."""
     from app.services import local_scorer
+    from app.services.matcher import recheck_stats
 
-    return {"model": local_scorer.stats(current_user.id), "min_examples": local_scorer.MIN_EXAMPLES}
+    s = _get_settings(current_user.id, session)
+    return {"model": local_scorer.stats(current_user.id), "min_examples": local_scorer.MIN_EXAMPLES,
+            "recheck": recheck_stats(current_user.id, s.score_threshold, session)}
 
 
 @router.post("/local-model/train")

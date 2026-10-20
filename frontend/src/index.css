@@ -1073,3 +1073,16 @@ input[type="range"] {
 .remote-view:focus { box-shadow: 0 0 0 3px #93c5fd; }
 .remote-view img { width: 100%; display: block; cursor: pointer; user-select: none; }
 .remote-wait { padding: 3rem; text-align: center; color: #64748b; }
+
+.ai-modes { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 0.6rem; margin-bottom: 1rem; }
+.ai-mode {
+  display: grid; gap: 0.25rem; padding: 0.75rem 0.85rem; border: 1.5px solid #e2e8f0; border-radius: 8px;
+  background: #fff; cursor: pointer;
+}
+.ai-mode input { position: absolute; opacity: 0; pointer-events: none; }
+.ai-mode:focus-within { box-shadow: 0 0 0 3px #bfdbfe; }
+.ai-mode-on { border-color: #2563eb; background: #eff6ff; }
+.ai-mode-title { font-weight: 700; font-size: 0.9rem; color: #0f172a; }
+.ai-mode-on .ai-mode-title::before { content: '● '; color: #2563eb; }
+.ai-mode-tag { font-size: 0.72rem; color: #2563eb; font-weight: 600; }
+.ai-mode-text { font-size: 0.8rem; color: #475569; line-height: 1.45; }

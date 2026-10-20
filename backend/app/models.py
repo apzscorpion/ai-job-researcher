@@ -140,7 +140,9 @@ class Settings(SQLModel, table=True):
 
     # Scoring
     score_threshold: int = Field(default=7)
-    use_gemini_scoring: bool = Field(default=False)
+    use_gemini_scoring: bool = Field(default=False)  # kept in sync with ai_mode (True only for full_ai)
+    # full_ai | semi_ai | local_plus_ai | local_only — see app.services.llm.AI_MODES; None = from use_gemini_scoring
+    ai_mode: Optional[str] = None
 
     # Automation
     daily_cap: int = Field(default=30)
@@ -182,7 +184,10 @@ class Job(SQLModel, table=True):
     # Scoring
     score: Optional[float] = None
     score_reason: Optional[str] = None
-    score_source: Optional[str] = None  # "ai" (cloud/local LLM) or "local" (the user's trained scorer); None = ai
+    # "ai" (cloud/local LLM at search time), "local" (the user's trained scorer), "local_llm" (a borderline
+    # local score re-checked by the local LLM in the background), "local_nocheck" (re-check failed); None = ai
+    score_source: Optional[str] = None
+    quick_score: Optional[float] = None  # the trained scorer's score before a local-LLM re-check replaced it
     # JSON list of résumé changes the scorer suggests for this job
     resume_tips: Optional[str] = None
 

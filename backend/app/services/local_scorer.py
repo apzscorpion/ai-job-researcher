@@ -102,7 +102,7 @@ async def train(user_id: int, session) -> Optional[Dict[str, Any]]:
                                           col(Job.score).is_not(None))).all()
     rows, y = [], []
     for job in jobs:
-        if (job.score_source or "ai") != "ai":  # learn from the AI, never from its own guesses
+        if (job.score_source or "ai") not in ("ai", "local_llm"):  # learn from an LLM, never from its own guesses
             continue
         emb = json_decode(job.embedding, None) if job.embedding else None
         if not emb and job.description:

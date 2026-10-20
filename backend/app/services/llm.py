@@ -1,4 +1,4 @@
-﻿"""
+"""
 LLM integration helpers.
 
 Ollama:
@@ -135,8 +135,29 @@ def quota_status(settings: Any) -> List[Dict[str, Any]]:
     return out
 
 
+AI_MODES = ("full_ai", "semi_ai", "local_plus_ai", "local_only")
+
+
+def ai_mode(settings: Any) -> str:
+    """How much of the work goes to cloud AI keys vs. models running on this computer (Settings → AI mode)."""
+    mode = getattr(settings, "ai_mode", None)
+    if mode in AI_MODES:
+        return mode
+    return "full_ai" if getattr(settings, "use_gemini_scoring", False) else "semi_ai"
+
+
+def local_first(settings: Any) -> bool:
+    """Quick text tasks (form answers, résumé reports) try the local model before the cloud keys."""
+    return ai_mode(settings) == "local_plus_ai"
+
+
 def providers_for(settings: Any) -> List[Dict[str, str]]:
-    """Decrypted AI providers in the order they are tried: the main Gemini key, then the extra ones."""
+    """Decrypted AI providers in the order they are tried: the main Gemini key, then the extra ones.
+
+    Empty in "only local models" mode, so nothing is ever sent to a cloud AI.
+    """
+    if ai_mode(settings) == "local_only":
+        return []
     from app import crypto
     from app.models import json_decode
 
@@ -344,13 +365,18 @@ async def gemini_search(query: str, api_key: str) -> str:
 
 
 async def generate(prompt: str, providers: List[Dict[str, str]], ollama_model: str, ollama_url: str,
-                   json_mode: bool = False, timeout: float = 300.0, light: bool = False) -> Tuple[str, str]:
+                   json_mode: bool = False, timeout: float = 300.0, light: bool = False,
+                   prefer_local: bool = False) -> Tuple[str, str]:
     """Try each cloud provider in order, then local Ollama. Returns (text, name of the AI that answered).
 
     light=True (scoring, form answers): Gemini's Flash-Lite models first, keeping the stronger Flash quota
     for cover letters, emails and the site agent.
     """
     gemini_models = GEMINI_LITE_MODELS + GEMINI_MODELS if light else GEMINI_MODELS + GEMINI_LITE_MODELS
+    if prefer_local and providers:  # "local models + AI key": this computer first, the cloud as backup
+        text = await chat([{"role": "user", "content": prompt}], ollama_model, ollama_url, json_mode, timeout)
+        if text:
+            return text, "local model"
     for p in providers:
         if p["kind"] == "gemini":
             from google.genai import types  # type: ignore
