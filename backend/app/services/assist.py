@@ -35,7 +35,7 @@ def status(user_id: int) -> Dict[str, Any]:
     page = s.get("page")
     return {"state": s["state"], "app_id": s["app_id"], "log": s["log"][-30:], "chat": s["chat"][-80:],
             "question": s.get("question"), "title": s.get("title", ""),
-            "url": page.url if page and s["state"] not in ("closed", "error") else ""}
+            "url": (connections.current_page(s) or page).url if page and s["state"] not in ("closed", "error") else ""}
 
 
 LIVE = ("starting", "agent", "asking", "waiting_you")
@@ -190,8 +190,10 @@ async def _run(user_id: int, app_id: int, session: Dict[str, Any]) -> None:
                         page = context.pages[0] if context.pages else await context.new_page()
                         session["page"] = page
                         # the live view (frames + clicks/typing) uses the same machinery as job-site sign-in
-                        connections._remote[user_id] = {"site": "assist", "page": page, "state": "open",
-                                                        "done": session["done"], "active": time.monotonic()}
+                        connections._remote[user_id] = {"site": "assist", "page": page, "context": context,
+                                                        "state": "open", "done": session["done"],
+                                                        "active": time.monotonic()}
+                        session["context"] = context
                         _say(session, f"Opening {url}")
                         await page.goto(url, wait_until="domcontentloaded", timeout=45_000)
                         if job.source == "link" and job.title.startswith("Application at"):
@@ -207,20 +209,29 @@ async def _run(user_id: int, app_id: int, session: Dict[str, Any]) -> None:
                                     f"from the candidate's data, upload the résumé. Do NOT click the final Submit / Apply "
                                     f"button: when everything is filled, stop with status \"need_human\" and reason "
                                     f"\"Everything is filled — review it and click Submit\".")
-                        await _quick_fill(session, context.pages[-1], profile, settings, {
-                            "email": email, "resume_path": profile.resume_path, "cover_letter": app.cover_letter or "",
-                            "cover_letter_path": cover_path})
+                        quick_extra = {"email": email, "resume_path": profile.resume_path,
+                                       "cover_letter": app.cover_letter or "", "cover_letter_path": cover_path}
+                        quick_done: set = set()
+
+                        async def on_page(pg) -> None:
+                            if pg.url.split("?")[0] not in quick_done:
+                                quick_done.add(pg.url.split("?")[0])
+                                await _quick_fill(session, pg, profile, settings, quick_extra)
+                                session["state"] = "agent"
                         while not session["done"].is_set():
                             session["state"] = "agent"
                             _say(session, "AI is reading the page and filling the form…")
 
-                            def on_step(step: int, st: str, reason: str) -> None:
-                                _say(session, f"Step {step + 1}: {reason or st}")
+                            def on_step(step: int, st: str, reason: str, url: str = "") -> None:
+                                from urllib.parse import urlparse
+
+                                where = urlparse(url).netloc.removeprefix("www.")
+                                _say(session, f"Step {step + 1}{' on ' + where if where else ''}: {reason or st}")
 
                             result, note = await agent_apply(context.pages[-1], job, profile, settings, goal,
                                                              app.cover_letter or "", cover_path, email, on_step=on_step,
                                                              answers=session["answers"], extra_files=session["files"],
-                                                             allow_ask=True)
+                                                             allow_ask=True, on_page=on_page)
                             page = context.pages[-1]
                             session["page"] = connections._remote[user_id]["page"] = page
                             if result == "ask":

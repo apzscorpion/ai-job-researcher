@@ -317,7 +317,8 @@ async def _act(page, frames: Dict[str, Any], action: Dict[str, Any], files: Dict
 async def agent_apply(page, job: Job, profile: Profile, settings: Settings, goal: str,
                       cover_letter: str = "", cover_letter_path: str = "", email: str = "",
                       on_step=None, answers: Optional[List[str]] = None,
-                      extra_files: Optional[Dict[str, str]] = None, allow_ask: bool = False) -> Tuple[str, str]:
+                      extra_files: Optional[Dict[str, str]] = None, allow_ask: bool = False,
+                      on_page=None) -> Tuple[str, str]:
     """Returns (status, note). With allow_ask (the live "Fill with AI" chat), status can be "ask": note is the
     question for the candidate; their reply comes back in *answers* / *extra_files* on the next call."""
     files = {"resume": profile.resume_path or "", "cover_letter": cover_letter_path, **(extra_files or {})}
@@ -325,11 +326,15 @@ async def agent_apply(page, job: Job, profile: Profile, settings: Settings, goal
     history: List[str] = []
     claimed = False
     context = page.context
+    last_host = None
     for step in range(MAX_STEPS):
         if len(context.pages) > 1:  # "Apply" opened a new tab: follow it
             page = context.pages[-1]
         await page.wait_for_load_state("domcontentloaded")
         await asyncio.sleep(1.5)
+        if on_page and urlparse(page.url).netloc != last_host:
+            last_host = urlparse(page.url).netloc
+            await on_page(page)  # a new site (e.g. LinkedIn → the company's form): the fast filler goes first
         if await page.locator(_CAPTCHA).count() > 0:
             return "needs_manual", f"The site asked for a captcha / human check. Finish it here: {page.url}"
         body = await page.locator("body").inner_text()
@@ -348,7 +353,7 @@ async def agent_apply(page, job: Job, profile: Profile, settings: Settings, goal
         status, reason = plan.get("status", "continue"), str(plan.get("reason", ""))[:200]
         logger.info("agent_apply: job_id=%s step=%s status=%s reason=%s (%s)", job.id, step, status, reason, used)
         if on_step:
-            on_step(step, status, reason)
+            on_step(step, status, reason, page.url)
         if status == "applied":
             # trust the page, not the model: look for the site's own confirmation
             await asyncio.sleep(3)

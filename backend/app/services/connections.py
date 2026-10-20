@@ -143,11 +143,21 @@ _remote: Dict[int, Dict[str, Any]] = {}   # user_id -> {site, page, done, state,
 _KEYS = {"Enter", "Tab", "Backspace", "Delete", "Escape", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"}
 
 
+def current_page(s: Dict[str, Any]):
+    """The tab to show and control: the newest open one, so "Apply" opening a new tab is followed live."""
+    context = s.get("context")
+    if context is not None:
+        pages = [p for p in context.pages if not p.is_closed()]
+        if pages:
+            return pages[-1]
+    return s.get("page")
+
+
 def remote_status(user_id: int) -> Dict[str, Any]:
     s = _remote.get(user_id)
     if not s:
         return {"state": "none"}
-    page = s.get("page")
+    page = current_page(s)
     name = SITES[s["site"]]["name"] if s["site"] in SITES else "Application"
     return {"state": s["state"], "site": s["site"], "name": name,
             "url": page.url if page and s["state"] == "open" else ""}
@@ -175,7 +185,7 @@ async def _remote_run(user_id: int, site: str, done: asyncio.Event) -> None:
                 try:
                     page = context.pages[0] if context.pages else await context.new_page()
                     await page.goto(info["url"], wait_until="domcontentloaded")
-                    session.update(page=page, state="open")
+                    session.update(page=page, context=context, state="open")
                     while not done.is_set() and time.monotonic() - session["active"] < _REMOTE_IDLE_S:
                         session["page"] = context.pages[-1] if context.pages else page  # follow pop-ups
                         if info["cookie"] and _state(await context.cookies(), info) == "signed_in":
@@ -198,11 +208,12 @@ async def _remote_run(user_id: int, site: str, done: asyncio.Event) -> None:
 
 async def remote_frame(user_id: int) -> Optional[bytes]:
     s = _remote.get(user_id)
-    if not s or s["state"] != "open" or not s.get("page"):
+    page = current_page(s) if s else None
+    if not s or s["state"] != "open" or not page:
         return None
     s["active"] = time.monotonic()
     try:
-        return await s["page"].screenshot(type="jpeg", quality=60, timeout=10_000)
+        return await page.screenshot(type="jpeg", quality=60, timeout=10_000)
     except Exception:
         return None
 
@@ -210,10 +221,10 @@ async def remote_frame(user_id: int) -> Optional[bytes]:
 async def remote_input(user_id: int, kind: str, x: float = 0, y: float = 0, text: str = "", key: str = "",
                        dy: float = 0) -> bool:
     s = _remote.get(user_id)
-    if not s or s["state"] != "open" or not s.get("page"):
+    page = current_page(s) if s else None
+    if not s or s["state"] != "open" or not page:
         return False
     s["active"] = time.monotonic()
-    page = s["page"]
     if kind == "click":
         await page.mouse.click(x, y)
     elif kind == "type":
