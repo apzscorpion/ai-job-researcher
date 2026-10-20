@@ -143,6 +143,14 @@ export async function testEmail() {
   return apiFetch('/settings/test-email', { method: 'POST' })
 }
 
+export async function getLocalModel() {
+  return apiFetch('/settings/local-model')
+}
+
+export async function trainLocalModel() {
+  return apiFetch('/settings/local-model/train', { method: 'POST' })
+}
+
 export async function revealKey(keyId) {
   return apiFetch(`/settings/keys/${encodeURIComponent(keyId)}/reveal`, { method: 'POST' })
 }

@@ -306,13 +306,11 @@ async def _apply_email(app, job, profile, settings, providers, to: str) -> Tuple
 
 
 async def _apply_site(app, job, profile, settings, providers, email: str) -> Tuple[str, str, Optional[str]]:
-    """Cover letter + company application page. Returns (status, note, sent_to)."""
-    from app.config import OLLAMA_MODEL, OLLAMA_URL
-    from app.services import mailer, site_apply
+    """Company application page. Returns (status, note, sent_to)."""
+    from app.services import site_apply
 
-    if not app.cover_letter:
-        app.cover_letter, _ = await mailer.write_cover_letter(job, profile, providers, OLLAMA_URL, OLLAMA_MODEL,
-                                                              email=email)
+    # No cover letter for site applications (the user's choice: it costs an AI request each); the email
+    # path below writes one if the site turns out to want an email
     status, note, url = await site_apply.apply_company_site(job, profile, settings, app.cover_letter or "", email)
     if status == "email":
         app.method = "email"

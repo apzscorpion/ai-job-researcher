@@ -294,6 +294,30 @@ def _stored_key(s: Settings, key_id: str) -> str:
     return next((p.get("key", "") for p in _providers(s) if p.get("id") == key_id), "")
 
 
+@router.get("/local-model")
+def local_model(current_user: User = Depends(get_current_user)) -> Dict[str, Any]:
+    """This user's own trained job scorer (None until enough jobs have been AI-scored)."""
+    from app.services import local_scorer
+
+    return {"model": local_scorer.stats(current_user.id), "min_examples": local_scorer.MIN_EXAMPLES}
+
+
+@router.post("/local-model/train")
+async def train_local_model(
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+) -> Dict[str, Any]:
+    from app.security import rate_limit
+    from app.services import local_scorer
+
+    rate_limit(f"train:{current_user.id}", 6, 3600, "Retrained recently — try again later")
+    stats = await local_scorer.train(current_user.id, session)
+    if stats is None:
+        raise HTTPException(status_code=409, detail=f"Not enough AI-scored jobs yet (needs {local_scorer.MIN_EXAMPLES}) "
+                                                    "— keep cloud scoring on for a few searches first")
+    return {"model": stats, "min_examples": local_scorer.MIN_EXAMPLES}
+
+
 @router.post("/keys/{key_id}/reveal")
 def reveal_key(
     key_id: str,

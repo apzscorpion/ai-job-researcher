@@ -103,7 +103,7 @@ Location: {profile.location or "see résumé"}
 </resume>
 
 Form question: {question}{choose}"""
-    text, _ = await generate(prompt, providers_for(settings), OLLAMA_MODEL, OLLAMA_URL)
+    text, _ = await generate(prompt, providers_for(settings), OLLAMA_MODEL, OLLAMA_URL, light=True)
     answer = (text or "").strip().strip('"').strip()
     if not answer or "UNKNOWN" in answer.upper():
         return ""

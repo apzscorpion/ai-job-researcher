@@ -384,10 +384,22 @@ async def score_jobs(
         logger.info("score_jobs: user_id=%s has no résumé yet — not scoring", user_id)
         return
 
-    providers = llm.providers_for(settings) if settings.use_gemini_scoring else []
+    from app.services import local_scorer
+
+    providers = llm.providers_for(settings)
     skills = selected_skills(profile)
 
     profile_embedding = await llm.embed(resume_text[:4000], embed_model, ollama_url)
+
+    # Cloud scoring off: the user's own trained model scores instantly on this machine. Until it exists
+    # (or if it's not accurate enough) the AI keeps scoring, which is also how it gets its examples.
+    model = None if settings.use_gemini_scoring else local_scorer.load(user_id)
+    if model and profile_embedding and cosine_sim(model["resume_emb"], profile_embedding) < 0.999:
+        await local_scorer.train(user_id, session)  # résumé changed since training
+        model = local_scorer.load(user_id)
+    if model and not model.get("usable"):
+        model = None
+    new_ai_labels = 0
 
     for job_id in job_ids:
         job = session.get(Job, job_id)
@@ -414,21 +426,33 @@ async def score_jobs(
                 session.commit()
                 continue
 
-        # 3. LLM scoring
-        prompt = _build_score_prompt(resume_text, job, profile.location or "", settings, skills)
-        raw, _ = await llm.generate(prompt, providers, ollama_model, ollama_url, json_mode=True)
+        # 3. Score: the user's trained local model when available, otherwise the AI
+        if model and job_embedding:
+            m, mi = skill_match(skills, f"{job.title}\n{job.description or ''}")
+            from app.services.sources import relevant, resume_titles
 
-        if not raw:
-            # Every AI is out of quota or down: stop here instead of timing out on each remaining job
-            logger.warning("score_jobs: no LLM reply at job_id=%s — leaving the rest for the next search", job_id)
-            break
-
-        result = parse_score_response(raw)
-        if result is None:
-            logger.warning("score_jobs: unparseable score for job_id=%s raw=%r", job_id, raw[:200])
-            score, reason, tips = 0.0, "Score parsing failed", []
+            title_fit = relevant({"title": job.title, "description": ""}, resume_titles(profile), skills)
+            score = local_scorer.predict(model, job_embedding, len(m), len(mi), title_fit, bool(job.is_remote))
+            reason = (f"Scored on this computer by your trained model (typical error ±{model['mae']}, "
+                      f"learned from {model['examples']} AI-scored jobs).")
+            tips, source = [], "local"
         else:
-            score, reason, tips = result
+            prompt = _build_score_prompt(resume_text, job, profile.location or "", settings, skills)
+            raw, _ = await llm.generate(prompt, providers, ollama_model, ollama_url, json_mode=True, light=True)
+
+            if not raw:
+                # Every AI is out of quota or down: stop here instead of timing out on each remaining job
+                logger.warning("score_jobs: no LLM reply at job_id=%s — leaving the rest for the next search", job_id)
+                break
+
+            result = parse_score_response(raw)
+            if result is None:
+                logger.warning("score_jobs: unparseable score for job_id=%s raw=%r", job_id, raw[:200])
+                score, reason, tips = 0.0, "Score parsing failed", []
+            else:
+                score, reason, tips = result
+                new_ai_labels += 1
+            source = "ai"
 
         # 4. Deterministic skill check against the selected skills — caps over-optimistic LLM scores
         matched, missing = skill_match(skills, f"{job.title}\n{job.description or ''}")
@@ -441,6 +465,7 @@ async def score_jobs(
             tips = [f"If you have experience with {', '.join(missing[:6])}, add it to your résumé."] + tips
 
         job.score = score
+        job.score_source = source
         job.score_reason = reason
         job.resume_tips = json_encode(tips) if tips else None
         job.status = "scored"
@@ -463,3 +488,8 @@ async def score_jobs(
         session.commit()
 
         logger.info("score_jobs: job_id=%s score=%.1f %s", job_id, score, reason[:80])
+
+    # Keep the local model learning: retrain once enough new AI scores have come in
+    trained = local_scorer.load(user_id)
+    if new_ai_labels and (new_ai_labels >= 10 or not trained):
+        await local_scorer.train(user_id, session)

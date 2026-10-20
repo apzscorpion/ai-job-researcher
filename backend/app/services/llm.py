@@ -23,7 +23,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
-from app.config import GEMINI_MODELS
+from app.config import GEMINI_LITE_MODELS, GEMINI_MODELS
 
 logger = logging.getLogger(__name__)
 
@@ -126,7 +126,7 @@ def quota_status(settings: Any) -> List[Dict[str, Any]]:
     now = time.monotonic()
     out = []
     for p in providers_for(settings):
-        models = GEMINI_MODELS if p.get("kind") == "gemini" else [p.get("model", "")]
+        models = GEMINI_MODELS + GEMINI_LITE_MODELS if p.get("kind") == "gemini" else [p.get("model", "")]
         blocked = [{"model": m, "why": _block_why.get(_slot(p["key"], m), ""),
                     "minutes": int((_blocked[_slot(p["key"], m)] - now) // 60) + 1}
                    for m in models if _blocked.get(_slot(p["key"], m), 0.0) > now]
@@ -162,7 +162,7 @@ async def _generate(client, **kwargs):
     return await asyncio.to_thread(client.models.generate_content, **kwargs)
 
 
-async def _gemini_generate(api_key: str, contents: str, config=None) -> str:
+async def _gemini_generate(api_key: str, contents: str, config=None, models: Optional[List[str]] = None) -> str:
     """Try each usable Gemini model for this key in turn; "" when none replied."""
     if not api_key:
         return ""
@@ -170,7 +170,7 @@ async def _gemini_generate(api_key: str, contents: str, config=None) -> str:
     from google.genai import errors  # type: ignore
 
     client = genai.Client(api_key=api_key)
-    for model in _usable(api_key, GEMINI_MODELS):
+    for model in _usable(api_key, models or GEMINI_MODELS + GEMINI_LITE_MODELS):
         try:
             response = await _generate(client, model=model, contents=contents, config=config)
             if response.text:
@@ -247,7 +247,8 @@ async def test_provider(p: Dict[str, str]) -> List[Dict[str, Any]]:
         from google.genai import errors  # type: ignore
 
         client = genai.Client(api_key=p["key"])
-        for model in GEMINI_MODELS:
+        # the two strongest and two lite models: a test shouldn't burn a request on all of them
+        for model in GEMINI_MODELS[:2] + GEMINI_LITE_MODELS[:2]:
             start = time.monotonic()
             try:
                 resp = await asyncio.wait_for(asyncio.to_thread(
@@ -343,14 +344,19 @@ async def gemini_search(query: str, api_key: str) -> str:
 
 
 async def generate(prompt: str, providers: List[Dict[str, str]], ollama_model: str, ollama_url: str,
-                   json_mode: bool = False, timeout: float = 300.0) -> Tuple[str, str]:
-    """Try each cloud provider in order, then local Ollama. Returns (text, name of the AI that answered)."""
+                   json_mode: bool = False, timeout: float = 300.0, light: bool = False) -> Tuple[str, str]:
+    """Try each cloud provider in order, then local Ollama. Returns (text, name of the AI that answered).
+
+    light=True (scoring, form answers): Gemini's Flash-Lite models first, keeping the stronger Flash quota
+    for cover letters, emails and the site agent.
+    """
+    gemini_models = GEMINI_LITE_MODELS + GEMINI_MODELS if light else GEMINI_MODELS + GEMINI_LITE_MODELS
     for p in providers:
         if p["kind"] == "gemini":
             from google.genai import types  # type: ignore
 
             config = types.GenerateContentConfig(response_mime_type="application/json") if json_mode else None
-            text = await _gemini_generate(p["key"], prompt, config)
+            text = await _gemini_generate(p["key"], prompt, config, gemini_models)
         else:
             text = await _openai_chat(p, prompt, json_mode)
         if text:

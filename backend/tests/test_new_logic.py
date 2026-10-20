@@ -141,7 +141,8 @@ def test_provider_chain_skips_exhausted_keys_then_falls_back_to_ollama(monkeypat
     monkeypatch.setattr(llm, "_generate", quota_exceeded)
     monkeypatch.setattr(llm, "chat", fake_chat)
     monkeypatch.setattr(llm, "_openai_chat", fake_openai)
-    monkeypatch.setattr(llm, "GEMINI_MODELS", ["model-a", "model-b"])
+    monkeypatch.setattr(llm, "GEMINI_MODELS", ["model-a"])
+    monkeypatch.setattr(llm, "GEMINI_LITE_MODELS", ["model-b"])
     monkeypatch.setattr(llm, "_blocked", {})
     gemini = {"kind": "gemini", "name": "Gemini", "key": "key-111111"}
     down = {"kind": "openai", "name": "Down", "key": "k2", "base_url": "https://x", "model": "m"}
@@ -156,3 +157,42 @@ def test_provider_chain_skips_exhausted_keys_then_falls_back_to_ollama(monkeypat
 
     # Nothing in the cloud answers -> the local model does
     assert asyncio.run(llm.generate("p", [gemini, down], "m", "u")) == ("local reply", "local model")
+
+
+def test_light_tasks_try_lite_models_first(monkeypatch):
+    import asyncio
+
+    from app.services import llm
+
+    tried = []
+
+    async def fake_gemini(key, contents, config=None, models=None):
+        tried.append(list(models))
+        return "ok"
+
+    monkeypatch.setattr(llm, "_gemini_generate", fake_gemini)
+    monkeypatch.setattr(llm, "GEMINI_MODELS", ["flash"])
+    monkeypatch.setattr(llm, "GEMINI_LITE_MODELS", ["lite"])
+    g = {"kind": "gemini", "name": "Gemini", "key": "k"}
+    asyncio.run(llm.generate("p", [g], "m", "u", light=True))
+    asyncio.run(llm.generate("p", [g], "m", "u"))
+    assert tried == [["lite", "flash"], ["flash", "lite"]]
+
+
+def test_local_scorer_learns_a_simple_pattern():
+    import numpy as np
+
+    from app.services import local_scorer as L
+
+    rng = np.random.default_rng(1)
+    E = rng.normal(size=(120, 16))
+    resume = rng.normal(size=16)
+    model = {"resume_emb": resume.tolist(), "emb_mean": E.mean(0).tolist(),
+             "components": np.linalg.svd(E - E.mean(0), full_matrices=False)[2][:8].tolist()}
+    matched = rng.integers(0, 8, 120)
+    y = np.clip(2 + matched * 1.0, 0, 10)  # score driven by skill matches
+    X = np.vstack([L._features(E[i], model, int(matched[i]), 2, True, False) for i in range(120)])
+    assert L._cv_mae(X, y, 0.1) < 0.3
+    w, b, mu, sd = L._fit(X, y, 0.1)
+    full = {**model, "w": w.tolist(), "b": b, "mu": mu.tolist(), "sd": sd.tolist(), "cal_x": [0, 10], "cal_y": [0, 10]}
+    assert abs(L.predict(full, E[0].tolist(), int(matched[0]), 2, True, False) - y[0]) < 0.5

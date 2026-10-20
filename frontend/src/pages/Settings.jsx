@@ -6,6 +6,7 @@ import {
 import Spinner from '../components/Spinner'
 import KeyField from '../components/KeyField'
 import RemoteBrowser from '../components/RemoteBrowser'
+import LocalModelCard from '../components/LocalModelCard'
 
 // ---------------------------------------------------------------------------
 // Helper toggle
@@ -604,9 +605,10 @@ export default function Settings() {
           </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1.25rem', marginBottom: '1rem' }}>
             <Toggle label="Search remote jobs worldwide (priority)" checked={prefs.remote_ok}           onChange={v => setPrefs(p => ({ ...p, remote_ok: v }))} />
-            <Toggle label="Use cloud AI for scoring (faster, but uses your daily AI quota)" checked={prefs.use_gemini_scoring} onChange={v => setPrefs(p => ({ ...p, use_gemini_scoring: v }))} />
+            <Toggle label="Score jobs with cloud AI (off = your local trained model, no quota)" checked={prefs.use_gemini_scoring} onChange={v => setPrefs(p => ({ ...p, use_gemini_scoring: v }))} />
             <Toggle label="Auto-Apply Enabled"   checked={prefs.auto_apply_enabled}  onChange={v => setPrefs(p => ({ ...p, auto_apply_enabled: v }))} />
           </div>
+          <LocalModelCard cloudScoring={prefs.use_gemini_scoring} />
           <button type="submit" className="btn btn-primary" disabled={prefSaving}>
             {prefSaving ? <><Spinner size="sm" /> Saving…</> : '💾 Save Preferences'}
           </button>

@@ -182,6 +182,7 @@ class Job(SQLModel, table=True):
     # Scoring
     score: Optional[float] = None
     score_reason: Optional[str] = None
+    score_source: Optional[str] = None  # "ai" (cloud/local LLM) or "local" (the user's trained scorer); None = ai
     # JSON list of résumé changes the scorer suggests for this job
     resume_tips: Optional[str] = None
 
