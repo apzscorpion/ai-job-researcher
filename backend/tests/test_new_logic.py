@@ -229,3 +229,24 @@ def test_needs_you_report_groups_real_notes():
     assert reason_of("This job is no longer accepting applications.") == "closed"
     assert reason_of("The AI agent couldn't finish in 14 steps. Finish it here: https://x") == "too_long"
     assert reason_of("Unexpected error while applying.") == "other"
+
+
+def test_freehire_source_parses_and_skips_telegram(monkeypatch):
+    import httpx
+    from app.services import sources
+
+    body = {"data": [
+        {"title": "Frontend Developer (React)", "company": "Acme", "location": "Kochi", "url": "https://boards.greenhouse.io/acme/jobs/1",
+         "description": "<p>React</p>", "work_mode": "onsite"},
+        {"title": "React Dev", "company": "X", "location": "India", "url": "https://t.me/cs_algo/1"}]}
+    seen = {}
+
+    def handler(req):
+        seen.update(req.url.params)
+        return httpx.Response(200, json=body)
+
+    real = httpx.Client
+    monkeypatch.setattr(sources.httpx, "Client", lambda **kw: real(transport=httpx.MockTransport(handler), **kw))
+    jobs = sources._scrape_freehire("frontend developer", countries="IN")
+    assert seen["countries"] == "IN" and seen["q"] == "frontend developer"
+    assert [j["company"] for j in jobs] == ["Acme"] and jobs[0]["source"] == "freehire" and not jobs[0]["is_remote"]

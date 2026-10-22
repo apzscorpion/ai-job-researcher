@@ -189,7 +189,7 @@ def _candidate(profile: Profile, settings: Settings, email: str, cover_letter: s
 
 
 _SOURCE_NAMES = {"linkedin": "LinkedIn", "naukri": "Naukri", "indeed": "Indeed", "glassdoor": "Glassdoor",
-                 "remoteok": "RemoteOK", "remotive": "Remotive", "infopark": "Infopark", "technopark": "Technopark"}
+                 "remoteok": "RemoteOK", "remotive": "Remotive", "freehire": "freehire", "infopark": "Infopark", "technopark": "Technopark"}
 
 
 def _prompt(goal: str, job: Job, candidate: str, resume: str, cover_letter: str, history: List[str], obs: str,

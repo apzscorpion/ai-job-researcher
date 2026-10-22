@@ -340,6 +340,7 @@ export default function Applications() {
             <option value="naukri">Naukri</option>
             <option value="indeed">Indeed</option>
             <option value="remotive">Remotive</option>
+            <option value="freehire">freehire</option>
             <option value="remoteok">RemoteOK</option>
           </select>
         </div>

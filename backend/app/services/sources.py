@@ -240,6 +240,33 @@ def _scrape_remotive(title: str) -> List[Dict[str, Any]]:
     return jobs
 
 
+def _scrape_freehire(title: str, **where: str) -> List[Dict[str, Any]]:
+    """Tech jobs freehire.me collects from company ATS boards (Greenhouse, Lever, Workday…); no key needed.
+
+    where: work_mode="remote" or countries="IN".
+    """
+    jobs: List[Dict[str, Any]] = []
+    try:
+        with httpx.Client(timeout=_HTTP_TIMEOUT, headers=_HEADERS, follow_redirects=True) as client:
+            resp = client.get("https://freehire.me/api/v1/jobs/search", params={
+                "q": title, "q_fields": "title", "sort": "posted_at", "order": "desc", "limit": 50, **where})
+            resp.raise_for_status()
+        for item in resp.json().get("data", []):
+            url = item.get("url") or ""
+            if "t.me/" in url:  # Telegram channel posts: nothing to apply on
+                continue
+            remote = item.get("work_mode") == "remote" or where.get("work_mode") == "remote"
+            jobs.append(_job(
+                item.get("title", ""), item.get("company", ""), url, "freehire",
+                location=item.get("location") or ("Remote" if remote else ""),
+                description=_html_to_text(item.get("description") or ""),
+                apply_url=url, is_remote=remote,
+            ))
+    except Exception:
+        logger.warning("_scrape_freehire failed for %s %s", title, where, exc_info=True)
+    return jobs
+
+
 def _scrape_remoteok(tags: List[str]) -> List[Dict[str, Any]]:
     """Remote jobs from RemoteOK's public API, one request per skill tag."""
     jobs: List[Dict[str, Any]] = []
@@ -396,6 +423,7 @@ async def run_search(user_id: int, session: Session) -> None:
 
 async def _run_search(user_id: int, session: Session) -> None:
     from app.services import matcher
+    from app.services.browser_apply import country_of
 
     settings = session.exec(select(Settings).where(Settings.user_id == user_id)).first()
     profile = session.exec(select(Profile).where(Profile.user_id == user_id)).first()
@@ -426,6 +454,7 @@ async def _run_search(user_id: int, session: Session) -> None:
     if settings.remote_ok:
         for title in target_titles:
             all_raw_jobs.extend(await asyncio.to_thread(_scrape_remotive, title))
+            all_raw_jobs.extend(await asyncio.to_thread(_scrape_freehire, title, work_mode="remote"))
             all_raw_jobs.extend(await asyncio.to_thread(
                 _scrape_jobspy, title, "Worldwide", ["linkedin"], True))
             if gemini_key:
@@ -441,6 +470,9 @@ async def _run_search(user_id: int, session: Session) -> None:
                 _scrape_jobspy, title, location, ["linkedin", "indeed", "naukri", "glassdoor"]))
         if gemini_key and target_locations:
             all_raw_jobs.extend(await _gemini_search_jobs(title, target_locations[0], gemini_key))
+        # shortcut: country_of only recognises India, add an ISO-code map when users elsewhere sign up
+        if any(country_of(loc) == "India" for loc in target_locations):
+            all_raw_jobs.extend(await asyncio.to_thread(_scrape_freehire, title, countries="IN"))
 
     # Kerala tech parks only for users looking there; titles only, so filter by title
     where = " ".join(target_locations + [profile.location or "" if profile else ""]).lower()

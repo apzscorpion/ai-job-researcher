@@ -22,7 +22,7 @@ function ScoreBadge({ score, status }) {
 // Source badge
 // ---------------------------------------------------------------------------
 const SOURCE_NAMES = {
-  linkedin: 'LinkedIn', naukri: 'Naukri', indeed: 'Indeed', remotive: 'Remotive',
+  linkedin: 'LinkedIn', naukri: 'Naukri', indeed: 'Indeed', remotive: 'Remotive', freehire: 'freehire',
   remoteok: 'RemoteOK', infopark: 'Infopark', technopark: 'Technopark', glassdoor: 'Glassdoor', google: 'Google Jobs',
 }
 
@@ -389,6 +389,7 @@ export default function Jobs() {
             <option value="naukri">Naukri</option>
             <option value="indeed">Indeed</option>
             <option value="remotive">Remotive</option>
+            <option value="freehire">freehire</option>
             <option value="remoteok">RemoteOK</option>
             <option value="infopark">Infopark</option>
             <option value="technopark">Technopark</option>
