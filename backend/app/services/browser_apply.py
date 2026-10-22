@@ -492,12 +492,15 @@ async def apply_linkedin(
         if await easy_apply_btn.count() == 0:
             apply_btn = page.locator("button.jobs-apply-button, a.jobs-apply-button, button:has-text('Apply')").first
             if await apply_btn.count() > 0:
-                found = await _follow_external(page, apply_btn, job)
-                return "external", ("Not an Easy Apply job — LinkedIn sends applicants to the company's own site"
-                                    + (f" ({job.apply_url.split('/')[2]})." if found else "."))
-            if await page.locator(":text('No longer accepting applications')").count() > 0:
+                if await _follow_external(page, apply_btn, job):
+                    return "external", ("Not an Easy Apply job — LinkedIn sends applicants to the company's own "
+                                        f"site ({job.apply_url.split('/')[2]}).")
+            elif await page.locator(":text('No longer accepting applications')").count() > 0:
                 return "needs_manual", "This job is no longer accepting applications."
-            return "needs_manual", f"No Apply button found on LinkedIn. Check the job here: {job.url}"
+            # no company URL came out (or no button matched): the AI works it out on this signed-in page
+            return await _agent_finish(page, job, profile, settings,
+                                       "Click this LinkedIn job's Apply button, follow it to wherever the "
+                                       "application is taken and complete the application.")
 
         await easy_apply_btn.click()
         await random_sleep(1.5, 3.0)
@@ -610,9 +613,11 @@ async def apply_naukri(
 
         company_btn = page.locator("button:has-text('Apply on company site')").first
         if await company_btn.count() > 0:
-            found = await _follow_external(page, company_btn, job)
-            return "external", ("Naukri sends applicants to the company's own site"
-                                + (f" ({job.apply_url.split('/')[2]})." if found else "."))
+            if await _follow_external(page, company_btn, job):
+                return "external", f"Naukri sends applicants to the company's own site ({job.apply_url.split('/')[2]})."
+            return await _agent_finish(page, job, profile, settings,
+                                       "Click 'Apply on company site', follow it to the company's page and "
+                                       "complete the application.")
         apply_btn = page.locator("button:has-text('Apply'), a:has-text('Apply Now')").first
         if await apply_btn.count() == 0:
             if await page.locator(":text('Applied')").count() > 0:

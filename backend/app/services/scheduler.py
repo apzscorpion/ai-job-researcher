@@ -130,9 +130,8 @@ def _notify(session, user_id: int, event: str, job, message: str) -> None:
                            "message": message}, ensure_ascii=False),
     ))
 
-
+# Only account-level problems (a platform paused) email the user; per-job "needs you" notes stay in the app
 # Notes that mean a person has to step in (captcha, security check, login) — the user gets an email too
-_NEEDS_HUMAN = re.compile(r"captcha|security check|verif|logged out|signed out|sign(ed)? in|log ?in", re.I)
 _ALERT_GAP_S = 30 * 60
 _last_alert: Dict[int, float] = {}
 
@@ -380,9 +379,7 @@ async def _apply_one(session, app, job, user_id: int, settings, profile, user_em
         status, note = "failed", f"Unexpected error while applying. Apply here: {job.url}"
 
     if status == "needs_manual":
-        _notify(session, user_id, "apply_needs_you", job, note)
-        if _NEEDS_HUMAN.search(note):
-            await _alert_user(settings, user_id, f"Verification needed: {job.title} at {job.company}", note)
+        _notify(session, user_id, "apply_needs_you", job, note)  # in-app only: no email per job
     elif status == "draft":
         _notify(session, user_id, "email_draft_ready", job, note.split("\n")[0])
 
