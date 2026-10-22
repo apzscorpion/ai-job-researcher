@@ -214,3 +214,18 @@ def test_ai_modes_route_work_between_cloud_and_local():
         assert llm.providers_for(settings("local_only")) == []
     finally:
         llm.providers_for = real
+
+
+def test_needs_you_report_groups_real_notes():
+    from app.routers.applications import reason_of
+
+    assert reason_of("Not an Easy Apply job — ... Can't apply here: The page is blank (about:blank)") == "blank_page"
+    assert reason_of("No Apply button found on LinkedIn. Check the job here: https://x") == "no_button"
+    assert reason_of("Needs you: The site requires account creation or login to apply.") == "account"
+    assert reason_of("Needs you: Cloudflare verification required Finish it here: https://x") == "captcha"
+    assert reason_of("The AI agent submitted on naukri.com but the site showed no confirmation — verify here") == "unconfirmed"
+    assert reason_of("The AI agent got no usable reply (AI quota?). Finish it here: https://x") == "ai_quota"
+    assert reason_of("Can't apply here: The job requires candidates to have 8 to 12 years of experience") == "qualified"
+    assert reason_of("This job is no longer accepting applications.") == "closed"
+    assert reason_of("The AI agent couldn't finish in 14 steps. Finish it here: https://x") == "too_long"
+    assert reason_of("Unexpected error while applying.") == "other"

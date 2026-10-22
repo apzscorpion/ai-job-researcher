@@ -1,6 +1,7 @@
 import Pagination from '../components/Pagination'
 import React, { useState, useEffect, useCallback } from 'react'
 import { getApplications, updateApplicationStatus, sendApplicationEmail, cancelApplication, retryAllApplications, assistApi } from '../api'
+import NeedsYouReport from '../components/NeedsYouReport'
 import { safeUrl } from '../safeUrl'
 import Spinner from '../components/Spinner'
 import StatusBadge, { CHANNELS } from '../components/StatusBadge'
@@ -299,6 +300,8 @@ export default function Applications() {
           <a href="/live" target="_blank" rel="noreferrer">Open the live view ↗</a>
         </div>
       )}
+
+      <NeedsYouReport onRetried={loadApps} />
 
       {/* ── Fill an application from a link ────────────────── */}
       <form className="fill-link" onSubmit={fillFromLink}>

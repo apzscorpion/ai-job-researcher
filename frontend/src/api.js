@@ -293,3 +293,11 @@ export async function getNotifications() {
 export async function markNotificationsSeen() {
   return apiFetch('/notifications/seen', { method: 'POST' })
 }
+
+export async function getNeedsYouReport() {
+  return apiFetch('/applications/report')
+}
+
+export async function retryReason(key) {
+  return apiFetch(`/applications/report/${encodeURIComponent(key)}/retry`, { method: 'POST' })
+}

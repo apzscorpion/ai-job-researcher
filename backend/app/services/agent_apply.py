@@ -209,7 +209,7 @@ Candidate data (use exactly; never invent personal facts):
 {candidate}
 
 <resume>
-{resume[:6000]}
+{resume[:3000]}
 </resume>
 <cover_letter>
 {cover_letter[:1500]}

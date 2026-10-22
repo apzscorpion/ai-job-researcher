@@ -330,6 +330,73 @@ def mark_applied(
     return {"applied": app_id}
 
 
+# Why an application stopped, in plain words. First match wins; ai_can = retrying lets the AI finish it.
+REASONS = [
+    ("unconfirmed", r"no confirmation", "Sent, but the site didn't confirm",
+     "The AI pressed Submit but no 'thank you' page appeared.", "Check your email for a confirmation.", False),
+    ("closed", r"expired|no longer accepting|job is closed", "Job closed",
+     "The employer stopped taking applications.", "Nothing to do — cancel it.", False),
+    ("captcha", r"captcha|cloudflare|verify you are human|human verification", "Human check (captcha)",
+     "The site asked to prove a person is there; the AI never solves these.",
+     "Open it with 🤖 Fill with AI and solve the check in the live view.", False),
+    ("account", r"sign.?up|account creation|create an account|needs an account|log ?in|password|authentication",
+     "Needs an account on the site", "The site wants you to sign up or log in, and the AI never creates "
+     "accounts or types passwords.", "Sign up there once, then retry — or apply there yourself.", False),
+    ("ai_quota", r"AI quota|no usable reply", "AI ran out of quota",
+     "Every AI key was used up while it was filling the form.", "Retry when the AI quota is back (see the header).", True),
+    ("blank_page", r"about:blank|blank page|no job posting url|no url",
+     "Lost the company link (fixed)", "The job applies on the company's site, but the link didn't come through "
+     "in time, so the AI started on an empty page.", "Retry: the AI now clicks Apply itself and follows it.", True),
+    ("no_button", r"no apply button|could not click|not clickable|apply button failed|no clear application",
+     "Couldn't find the Apply button (fixed)", "The fixed rules missed the button.",
+     "Retry: the AI now looks for the button itself.", True),
+    ("too_long", r"couldn't finish in \d+ steps", "Form too long for one try",
+     "The AI used all its steps before reaching Submit.", "Retry — or open it with 🤖 Fill with AI and watch.", True),
+    ("qualified", r"years of experience|requires candidates|not supported|multiple |missing resume|face-to-face",
+     "AI gave up on its own (fixed)", "The AI refused (e.g. 'needs 8+ years') or stopped on something "
+     "it should have handled.", "Retry: it now applies anyway and only stops for captcha, login or payment.", True),
+]
+
+
+def reason_of(note: str) -> str:
+    import re
+
+    return next((key for key, rx, *_ in REASONS if re.search(rx, note or "", re.I)), "other")
+
+
+def _stuck(user_id: int, session: Session):
+    return session.exec(select(Application, Job).join(Job, Job.id == Application.job_id).where(
+        Application.user_id == user_id, col(Application.status).in_(["needs_manual", "failed"]))).all()
+
+
+@router.get("/report")
+def needs_you_report(
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+) -> List[Dict[str, Any]]:
+    """Applications that stopped, grouped by why, with what happens next."""
+    info = {k: dict(key=k, title=t, why=w, next=n, ai_can=a) for k, _, t, w, n, a in REASONS}
+    info["other"] = dict(key="other", title="Other errors", why="Something unexpected went wrong.",
+                         next="Retry — or open it with 🤖 Fill with AI and watch.", ai_can=True)
+    groups: Dict[str, Dict[str, Any]] = {}
+    for app, job in _stuck(current_user.id, session):
+        g = groups.setdefault(reason_of(app.notes), {**info[reason_of(app.notes)], "count": 0, "jobs": []})
+        g["count"] += 1
+        g["jobs"].append({"id": app.id, "title": job.title, "company": job.company})
+    return sorted(groups.values(), key=lambda g: (not g["ai_can"], -g["count"]))
+
+
+@router.post("/report/{key}/retry")
+def retry_reason(
+    key: str,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+) -> Dict[str, Any]:
+    """Queue again every stopped application with this reason."""
+    apps = [app for app, _ in _stuck(current_user.id, session) if reason_of(app.notes) == key]
+    return _requeue(apps, current_user.id, session)
+
+
 @router.get("/{app_id}")
 def get_application(
     app_id: int,
@@ -398,6 +465,17 @@ class SendBody(BaseModel):
     subject: Optional[str] = None
 
 
+def _requeue(apps: List[Application], user_id: int, session: Session) -> Dict[str, Any]:
+    for app in apps:
+        app.status, app.method, app.notes, app.sent_to = "queued", "pending", "Retrying — queued again by you.", None
+        app.cover_letter = app.email_body = None  # rewritten in the current (formal) style
+        app.applied_at = datetime.utcnow()
+        session.add(app)
+    session.add(ActivityLog(user_id=user_id, event="applications_retried", detail=f"{len(apps)} re-queued"))
+    session.commit()
+    return {"requeued": len(apps)}
+
+
 @router.post("/retry-all")
 def retry_all(
     current_user: User = Depends(get_current_user),
@@ -407,14 +485,7 @@ def retry_all(
     apps = session.exec(select(Application).where(
         Application.user_id == current_user.id,
         col(Application.status).in_(["queued", "needs_manual", "failed", "draft"]))).all()
-    for app in apps:
-        app.status, app.method, app.notes, app.sent_to = "queued", "pending", "Retrying — queued again by you.", None
-        app.cover_letter = app.email_body = None  # rewritten in the current (formal) style
-        app.applied_at = datetime.utcnow()
-        session.add(app)
-    session.add(ActivityLog(user_id=current_user.id, event="applications_retried", detail=f"{len(apps)} re-queued"))
-    session.commit()
-    return {"requeued": len(apps)}
+    return _requeue(apps, current_user.id, session)
 
 
 @router.delete("/{app_id}")
