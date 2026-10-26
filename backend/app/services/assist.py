@@ -251,6 +251,7 @@ async def _run(user_id: int, app_id: int, session: Dict[str, Any]) -> None:
                                     f"button: when everything is filled, stop with status \"need_human\" and reason "
                                     f"\"Everything is filled — review it and click Submit\".")
                         quick_extra = {"email": email, "resume_path": profile.resume_path,
+                                       "job_location": job.location or "",
                                        "cover_letter": app.cover_letter or "", "cover_letter_path": cover_path}
                         quick_done: set = set()
 
@@ -291,6 +292,15 @@ async def _run(user_id: int, app_id: int, session: Dict[str, Any]) -> None:
                                 db.commit()
                                 session["state"] = "applied"
                                 await asyncio.sleep(4)  # let the user see the confirmation page
+                                break
+                            from app.services.agent_apply import CLOSED_NOTE
+
+                            if note.startswith(CLOSED_NOTE):  # nothing for the user to do in the window either
+                                app.notes = note
+                                db.add(app)
+                                db.commit()
+                                _say(session, "Stopped: this job doesn't take applications any more. Cancel it in "
+                                              "Applications.", kind="need")
                                 break
                             if result != "ask":
                                 session["state"] = "waiting_you"

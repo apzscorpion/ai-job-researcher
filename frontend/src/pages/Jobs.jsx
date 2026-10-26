@@ -58,7 +58,7 @@ function ApplyButtons({ job, onDone }) {
   const [msg, setMsg]   = useState('')
   const [err, setErr]   = useState('')
   const status = job.application_status
-  if (['applied', 'replied', 'applying'].includes(status) || !job.apply_options?.length) return null
+  if (['applied', 'replied', 'applying', 'cancelled'].includes(status) || !job.apply_options?.length) return null
 
   async function go(via) {
     setBusy(via); setMsg(''); setErr('')
@@ -409,6 +409,7 @@ export default function Jobs() {
           <select className="form-control" value={filterApplied} onChange={e => setFilterApplied(e.target.value)}>
             <option value="false">Not applied yet</option>
             <option value="true">Already applied / queued</option>
+            <option value="cancelled">Cancelled apply</option>
             <option value="">All jobs</option>
           </select>
         </div>

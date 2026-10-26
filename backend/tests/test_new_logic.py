@@ -250,3 +250,11 @@ def test_freehire_source_parses_and_skips_telegram(monkeypatch):
     jobs = sources._scrape_freehire("frontend developer", countries="IN")
     assert seen["countries"] == "IN" and seen["q"] == "frontend developer"
     assert [j["company"] for j in jobs] == ["Acme"] and jobs[0]["source"] == "freehire" and not jobs[0]["is_remote"]
+
+
+def test_deepseek_web_json_part():
+    from app.services.llm import _json_part
+
+    assert _json_part('json\nCopy\n{"score": 8}\nDownload') == '{"score": 8}'
+    assert _json_part('[1, 2]') == '[1, 2]'
+    assert _json_part('no json') == 'no json'

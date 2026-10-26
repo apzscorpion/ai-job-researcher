@@ -4,6 +4,7 @@ import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-route
 import Sidebar from './components/Sidebar'
 import StatusHeader from './components/StatusHeader'
 import LiveApply from './pages/LiveApply'
+import RemoteBrowser from './components/RemoteBrowser'
 import LogViewer from './components/LogViewer'
 import Login from './pages/Login'
 import Register from './pages/Register'
@@ -91,6 +92,8 @@ export default function App() {
 
         {/* Full-page live view for "Fill with AI" (opens in its own tab) */}
         <Route path="/live" element={<PrivateRoute><LiveApply /></PrivateRoute>} />
+        {/* Job-site sign-in live view (Settings → Job sites → Connect opens it in its own tab) */}
+        <Route path="/connect" element={<PrivateRoute><RemoteBrowser /></PrivateRoute>} />
 
         {/* Root */}
         <Route path="/" element={<RootRedirect />} />

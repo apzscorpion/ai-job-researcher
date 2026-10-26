@@ -5,7 +5,6 @@ import {
 } from '../api'
 import Spinner from '../components/Spinner'
 import KeyField from '../components/KeyField'
-import RemoteBrowser from '../components/RemoteBrowser'
 import AiModePicker from '../components/AiModePicker'
 
 // ---------------------------------------------------------------------------
@@ -51,8 +50,8 @@ const PROVIDER_PRESETS = {
 // Questions application forms ask that a résumé rarely answers
 const STANDARD_QUESTIONS = [
   ['notice_period',       'Notice period',                    'e.g. 30 days / Immediate'],
-  ['expected_salary',     'Expected salary',                  'e.g. USD 60,000 per year, or ₹30 LPA'],
-  ['current_salary',      'Current salary (optional)',        'Leave blank to skip questions about it'],
+  ['expected_salary',     'Expected salary (₹, for jobs in India)', 'e.g. 30 L, or 2,50,000'],
+  ['current_salary',      'Current salary (₹, optional)',     'Leave blank to skip questions about it'],
   ['work_authorization',  'Work authorisation',               'e.g. Indian citizen; can work remotely as a contractor or employee'],
   ['needs_sponsorship',   'Need visa sponsorship?',           'e.g. No for remote roles; Yes for on-site roles abroad'],
   ['willing_to_relocate', 'Willing to relocate?',             'e.g. Yes, to the EU or Middle East'],
@@ -100,7 +99,6 @@ export default function Settings() {
   const [sites, setSites]                 = useState([])
   const [syncing, setSyncing]             = useState(false)
   const [connectingPlatform, setConnectingPlatform] = useState(null)
-  const [remoteSite, setRemoteSite]       = useState(null)
   const [aiMode, setAiMode]               = useState('semi_ai')
   const [connectMsg, setConnectMsg]   = useState('')
   const [connectErr, setConnectErr]   = useState('')
@@ -273,7 +271,8 @@ export default function Settings() {
     setAnsMsg(''); setAnsErr('')
     setAnsSaving(true)
     try {
-      await updateSettings({ standard_answers: answers })
+      // the period shown by default is saved too, so the AI never has to guess it
+      await updateSettings({ standard_answers: { expected_salary_period: 'per year', current_salary_period: 'per year', ...answers } })
       setAnsMsg('Answers saved — application forms will use them.')
       setTimeout(() => setAnsMsg(''), 4000)
     } catch (err) { setAnsErr(err.message) }
@@ -336,22 +335,17 @@ export default function Settings() {
   async function handleConnect(platform) {
     setConnectMsg(''); setConnectErr('')
     setConnectingPlatform(platform)
+    const tab = window.open('', '_blank')  // before the await, or the browser blocks the new tab
     try {
-      const res = await connectJobSite(platform)
-      if (res.remote) setRemoteSite(sites.find(s => s.id === platform) || { id: platform, name: platform })
-      else setConnectMsg('A browser window is opening on this computer. Log in there, then close the window ' +
-                         '(LinkedIn and Naukri close by themselves once you are in). Then click “Sync all”.')
-    } catch (err) { setConnectErr(err.message) }
+      await connectJobSite(platform, true)
+      const name = sites.find(s => s.id === platform)?.name || platform
+      const url = `/connect?name=${encodeURIComponent(name)}`
+      if (tab && !tab.closed) tab.location.href = url
+      else window.location.href = url
+      setConnectMsg(`Sign in to ${name} in the new tab, then click “Sync all”.`)
+    } catch (err) { tab?.close(); setConnectErr(err.message) }
     finally { setConnectingPlatform(null) }
   }
-
-  const closeRemote = useCallback(signedIn => {
-    setRemoteSite(site => {
-      if (signedIn && site) setConnectMsg(`Signed in to ${site.name} — applying there now uses your account.`)
-      return null
-    })
-    loadBrowserStatus()
-  }, [loadBrowserStatus])
 
   // ---------------------------------------------------------------------------
   if (loading) return <Spinner text="Loading settings…" />
@@ -522,6 +516,8 @@ export default function Settings() {
         <p className="form-hint" style={{ marginBottom: '0.75rem' }}>
           LinkedIn, Naukri and company forms often ask these. Auto-apply answers only from your résumé and
           these answers — when a required question isn't covered, it stops and asks you instead of guessing.
+          For jobs outside India the AI quotes 10-20% below that country's usual pay for the role (never under
+          ₹1 L a month) instead of your Indian salary.
         </p>
         {ansMsg && <div className="alert alert-success">✅ {ansMsg}</div>}
         {ansErr && <div className="alert alert-error">⚠️ {ansErr}</div>}
@@ -530,8 +526,19 @@ export default function Settings() {
             {STANDARD_QUESTIONS.map(([key, label, placeholder]) => (
               <div key={key} className="form-group" style={{ minWidth: 260, flex: '1 1 45%' }}>
                 <label className="form-label" htmlFor={`ans-${key}`}>{label}</label>
-                <input id={`ans-${key}`} type="text" className="form-control" placeholder={placeholder}
-                  value={answers[key] || ''} onChange={e => setAnswers(a => ({ ...a, [key]: e.target.value }))} />
+                <div style={{ display: 'flex', gap: '0.4rem' }}>
+                  <input id={`ans-${key}`} type="text" className="form-control" placeholder={placeholder}
+                    value={answers[key] || ''} onChange={e => setAnswers(a => ({ ...a, [key]: e.target.value }))} />
+                  {key.endsWith('_salary') && (
+                    // saved as "<key>_period": the AI converts to whatever period a form asks for
+                    <select className="form-control" style={{ width: 'auto' }} aria-label={`${label} period`}
+                      value={answers[`${key}_period`] || 'per year'}
+                      onChange={e => setAnswers(a => ({ ...a, [`${key}_period`]: e.target.value }))}>
+                      <option value="per year">per year (LPA)</option>
+                      <option value="per month">per month</option>
+                    </select>
+                  )}
+                </div>
               </div>
             ))}
           </div>
@@ -706,7 +713,6 @@ export default function Settings() {
           )
         })}
       </Section>
-      {remoteSite && <RemoteBrowser name={remoteSite.name} onClose={closeRemote} />}
     </div>
   )
 }

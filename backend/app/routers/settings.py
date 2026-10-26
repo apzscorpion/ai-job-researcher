@@ -446,6 +446,9 @@ async def connect_job_site(
 
     if site not in connections.SITES:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown job site")
+    mine = connections._remote.get(current_user.id, {})
+    if mine.get("site") == site and mine.get("state") in ("starting", "open") and not mine["done"].is_set():  # reopen it
+        return {"launched": True, "site": site, "remote": True}
     if connections.busy(current_user.id, site):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT,
                             detail="That browser is already open or applying — finish there, then try again")

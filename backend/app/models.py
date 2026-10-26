@@ -212,7 +212,7 @@ class Application(SQLModel, table=True):
     job_id: int = Field(foreign_key="job.id", index=True)
 
     method: str  # email / linkedin / naukri / site / manual / pending
-    # queued / draft / applied / needs_manual / failed / replied
+    # queued / draft / applied / needs_manual / failed / replied / cancelled
     status: str = Field(default="queued")
 
     applied_at: datetime = Field(default_factory=datetime.utcnow)

@@ -162,6 +162,7 @@ async def _fill_and_submit(page, job: Job, profile: Profile, settings: Settings,
     ats = detect_ats(url)
     host = urlparse(url).netloc.lower()
     extra = {"email": email, "resume_path": profile.resume_path, "cover_letter": cover_letter,
+             "job_location": job.location or "",
              "cover_letter_path": _cover_file(job, profile, cover_letter)}
     where = f"{job.company}'s {ats.title() if ats else host} page"
 

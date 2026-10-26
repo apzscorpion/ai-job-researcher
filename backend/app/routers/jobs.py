@@ -4,7 +4,7 @@ Jobs router: list, filter, retrieve, trigger search, and delete job listings.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -72,7 +72,7 @@ def list_jobs(
     max_score: Optional[float] = Query(None),
     remote: Optional[bool] = Query(None),
     region: Optional[str] = Query(None, description="india | international | state:<name> | park:<name>"),
-    has_application: Optional[bool] = Query(None),
+    has_application: Optional[Literal["true", "false", "cancelled"]] = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     skip: Optional[int] = Query(None, ge=0),
@@ -103,8 +103,14 @@ def list_jobs(
     if remote is not None:
         stmt = stmt.where(Job.is_remote == remote)
     if has_application is not None:
-        with_app = col(Job.id).in_(select(Application.job_id).where(Application.user_id == current_user.id))
-        stmt = stmt.where(with_app if has_application else ~with_app)
+        mine = select(Application.job_id).where(Application.user_id == current_user.id)
+        cancelled = col(Job.id).in_(mine.where(Application.status == "cancelled"))
+        if has_application == "cancelled":
+            stmt = stmt.where(cancelled)
+        elif has_application == "true":  # applied / queued: everything but cancelled
+            stmt = stmt.where(col(Job.id).in_(mine.where(Application.status != "cancelled")))
+        else:
+            stmt = stmt.where(~col(Job.id).in_(mine))
     if region:
         from app.services.regions import region_clause
 

@@ -7,7 +7,7 @@ import Spinner from '../components/Spinner'
 import StatusBadge, { CHANNELS } from '../components/StatusBadge'
 import SkillChips from '../components/SkillChips'
 
-const STATUS_OPTIONS = ['queued', 'draft', 'applied', 'needs_manual', 'failed', 'replied']
+const STATUS_OPTIONS = ['queued', 'draft', 'applied', 'needs_manual', 'failed', 'replied', 'cancelled']
 const PAGE_SIZE = 20
 
 // ---------------------------------------------------------------------------
@@ -253,11 +253,11 @@ export default function Applications() {
   }
 
   async function handleCancel(app) {
-    if (!window.confirm(`Cancel the application for “${app.job?.title || 'this job'}”? It goes back to “Not applied yet” on the Jobs page.`)) return
+    if (!window.confirm(`Cancel the application for “${app.job?.title || 'this job'}”? It moves to “Cancelled apply” with its reason and is never sent.`)) return
     setUpdatingId(app.id)
     try {
       await cancelApplication(app.id)
-      setApps(prev => prev.filter(a => a.id !== app.id))
+      setApps(prev => prev.map(a => a.id === app.id ? { ...a, status: 'cancelled' } : a))
     } catch (err) {
       alert(`Couldn't cancel: ${err.message}`)
     } finally {
@@ -456,14 +456,14 @@ export default function Applications() {
                                     <option key={s} value={s}>{s}</option>
                                   ))}
                                 </select>
-                                {!['applied', 'replied', 'applying'].includes(app.status) && (
+                                {!['applied', 'replied', 'applying', 'cancelled'].includes(app.status) && (
                                   <button className="btn btn-primary btn-sm" style={{ marginTop: '0.3rem', marginRight: '0.3rem' }}
                                     onClick={() => fillWithAi(app)}
                                     title="The AI fills this application in a live window you can watch and step into">
                                     🤖 Fill with AI
                                   </button>
                                 )}
-                                {!['applied', 'replied', 'applying'].includes(app.status) && (
+                                {!['applied', 'replied', 'applying', 'cancelled'].includes(app.status) && (
                                   <button className="btn btn-secondary btn-sm" style={{ marginTop: '0.3rem' }}
                                     disabled={isUpdating} onClick={() => handleCancel(app)}
                                     title="Not sent yet: remove it so it never goes out">

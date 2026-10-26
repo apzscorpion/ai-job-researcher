@@ -34,6 +34,8 @@ SITES: Dict[str, Dict[str, Optional[str]]] = {
     "instahyre": {"name": "Instahyre", "url": "https://www.instahyre.com/login/",     "domain": "instahyre.com", "cookie": None,      "profile": "sites"},
     "cutshort":  {"name": "Cutshort",  "url": "https://cutshort.io/",                 "domain": "cutshort.io",   "cookie": None,      "profile": "sites"},
     "hirist":    {"name": "Hirist",    "url": "https://www.hirist.tech/",             "domain": "hirist",        "cookie": None,      "profile": "sites"},
+    # not a job site: the free DeepSeek chat, used as a last-resort AI once signed in (llm._deepseek_web)
+    "deepseek":  {"name": "DeepSeek chat (free AI)", "url": "https://chat.deepseek.com/sign_in", "domain": "deepseek.com", "cookie": None, "profile": "deepseek"},
 }
 _LOGIN_WAIT_S = 15 * 60
 
@@ -171,8 +173,22 @@ async def connect(user_id: int, site: str) -> bool:
                     await context.close()
 
 
+_checks: Dict[int, asyncio.Task] = {}
+
+
 async def check_all(user_id: int) -> Dict[str, str]:
-    """Signed-in state of every site, reading each saved profile's cookies (headless, nothing visited)."""
+    """Signed-in state of every site, reading each saved profile's cookies (headless, nothing visited).
+
+    A check already running is shared, not repeated: two at once (the page loading twice) took each other's
+    profile locks for "busy", and running them in turn kept a sign-in waiting for both.
+    """
+    task = _checks.get(user_id)
+    if not task or task.done():
+        task = _checks[user_id] = asyncio.create_task(_check_all(user_id))
+    return await asyncio.shield(task)  # one caller going away doesn't cancel it for the others
+
+
+async def _check_all(user_id: int) -> Dict[str, str]:
     from playwright.async_api import async_playwright  # type: ignore
 
     result: Dict[str, str] = {}
@@ -242,9 +258,11 @@ async def _remote_run(user_id: int, site: str, done: asyncio.Event) -> None:
         async with _lock(user_id, info["profile"]):
             async with async_playwright() as p:
                 context = await _open(p, user_id, info["profile"], background=True)
+                context.on("close", lambda *_: done.set())  # browser gone: free the profile now
                 try:
                     page = context.pages[0] if context.pages else await context.new_page()
-                    await page.goto(info["url"], wait_until="domcontentloaded")
+                    # "commit": show the page while it loads (DeepSeek takes ~20 s), and let Done end it sooner
+                    await page.goto(info["url"], wait_until="commit")
                     session.update(page=page, context=context, state="open")
                     while not done.is_set() and time.monotonic() - session["active"] < _REMOTE_IDLE_S:
                         session["page"] = context.pages[-1] if context.pages else page  # follow pop-ups

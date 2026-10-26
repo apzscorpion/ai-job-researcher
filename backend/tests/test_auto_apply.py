@@ -309,3 +309,22 @@ def test_assist_pause_blocks_the_agent_until_resume():
 
     assert asyncio.run(scenario()) == ("paused", True, True, "agent")
     assist._sessions.pop(997, None)
+
+
+def test_agent_field_must_match_the_element_label():
+    from app.services.agent_apply import field_matches
+
+    assert field_matches("Phone number", {"label": "Phone *"})
+    assert field_matches("Next", {"text": "Next step"})
+    assert not field_matches("Phone number", {"label": "Email address"})  # value meant for another box
+    assert field_matches("", {"label": "Email"})          # no field given: not blocked
+    assert field_matches("City", {"label": ""})           # unlabeled element: can't tell, not blocked
+
+
+def test_agent_sees_closed_postings():
+    from app.services.agent_apply import _CLOSED
+
+    assert _CLOSED.search("Hybrid Full-time\nNot currently accepting applications\nAbout the job")
+    assert _CLOSED.search("No longer accepting applications")
+    assert _CLOSED.search("This position has been filled.")
+    assert not _CLOSED.search("We are accepting applications until 30 June. Apply now")

@@ -80,3 +80,24 @@ def test_only_one_gemini_key_is_active_and_inactive_keys_are_unused():
     assert [p["active"] for p in merged] == [True, False, False]
     s.ai_providers_enc = crypto.encrypt(json.dumps(merged))
     assert [p["name"] for p in providers_for(s)] == ["G1"]
+
+
+def test_cancel_keeps_the_application_with_the_ai_reason():
+    from types import SimpleNamespace
+
+    from sqlmodel import Session, SQLModel, create_engine
+
+    from app.models import Application
+    from app.routers.applications import cancel_application
+
+    engine = create_engine("sqlite://")
+    SQLModel.metadata.create_all(engine)
+    with Session(engine) as session:
+        app = Application(user_id=1, job_id=7, method="site", status="needs_manual",
+                          notes='This job is closed: the page says "Not currently accepting applications".')
+        session.add(app)
+        session.commit()
+        cancel_application(app.id, SimpleNamespace(id=1), session)
+        kept = session.get(Application, app.id)
+        assert kept.status == "cancelled"  # kept, so the job isn't "Not applied yet" (or re-queued) again
+        assert kept.notes.startswith("This job is closed: the page says")

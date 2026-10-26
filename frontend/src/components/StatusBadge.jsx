@@ -9,6 +9,7 @@ const STATUS_MAP = {
   needs_manual: { cls: 'badge-needs_manual', label: 'Needs you' },
   failed:       { cls: 'badge-failed',       label: 'Failed' },
   replied:      { cls: 'badge-replied',      label: 'Replied' },
+  cancelled:    { cls: 'badge-pending',      label: 'Cancelled apply' },
   pending:      { cls: 'badge-pending',      label: 'Pending' },
   success:      { cls: 'badge-success',      label: 'Success' },
   error:        { cls: 'badge-error',        label: 'Error' },

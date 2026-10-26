@@ -118,6 +118,8 @@ def _provider_name(p: Dict[str, str]) -> str:
     """What the provider is ("Gemini", "OpenRouter · gemma"), not the user's label for the key."""
     if p.get("kind") == "gemini":
         return "Gemini"
+    if p.get("kind") == "deepseek_web":
+        return p["name"]
     host = (p.get("base_url") or "").split("/")[2] if "//" in (p.get("base_url") or "") else ""
     name = next((v for k, v in _HOST_NAMES.items() if host.endswith(k)), host or "AI")
     model = (p.get("model") or "").split("/")[-1].split(":")[0].split("-")[0]
@@ -139,6 +141,7 @@ def quota_status(settings: Any) -> List[Dict[str, Any]]:
 
 
 AI_MODES = ("full_ai", "semi_ai", "local_plus_ai", "local_only")
+LOCAL_FIRST_TIMEOUT_S = 40.0  # "local models + AI key": how long this computer gets before the cloud answers
 
 
 def ai_mode(settings: Any) -> str:
@@ -170,6 +173,12 @@ def providers_for(settings: Any) -> List[Dict[str, str]]:
     if settings.ai_providers_enc:
         found += [p for p in json_decode(crypto.decrypt(settings.ai_providers_enc), [])
                   if p.get("key") and p.get("active", True)]  # switched-off keys are never used
+    from app.config import BROWSERS_DIR
+
+    uid = getattr(settings, "user_id", None)
+    if uid and (BROWSERS_DIR / str(uid) / "deepseek").is_dir():  # signed in via Job site connections
+        found.append({"kind": "deepseek_web", "name": "DeepSeek chat", "key": f"web-{uid}",
+                      "model": "chat", "user_id": uid})
     return [p for p in found if p.get("key")]
 
 
@@ -245,6 +254,56 @@ async def _openai_chat(p: Dict[str, str], prompt: str, json_mode: bool) -> str:
         return resp.json()["choices"][0]["message"]["content"] or ""
     except Exception as exc:
         logger.warning("AI %s (%s) failed: %s", p.get("name") or model, p.get("base_url"), exc)
+        return ""
+
+
+def _json_part(text: str) -> str:
+    """The JSON in a chat-page reply: rendered code blocks add a language label and button text around it."""
+    starts = [i for i in (text.find("{"), text.find("[")) if i >= 0]
+    end = max(text.rfind("}"), text.rfind("]"))
+    return text[min(starts):end + 1] if starts and end > min(starts) else text
+
+
+async def _deepseek_web(p: Dict[str, Any], prompt: str, json_mode: bool) -> str:
+    """Ask the free chat.deepseek.com in the user's signed-in browser profile (no API key).
+
+    shortcut: reads the page's own markup (#chat-input, .ds-markdown); fix the selectors when DeepSeek redesigns.
+    """
+    from app.services.connections import _lock, _open
+    from playwright.async_api import async_playwright  # type: ignore
+
+    key = p["key"]
+    if not _usable(key, ["chat"]):
+        return ""
+    if json_mode:
+        prompt += "\n\nReply with the JSON only."
+    try:
+        async with _lock(p["user_id"], "deepseek"), async_playwright() as pw:
+            context = await _open(pw, p["user_id"], "deepseek", background=True)
+            try:
+                page = context.pages[0] if context.pages else await context.new_page()
+                await page.goto("https://chat.deepseek.com/", wait_until="domcontentloaded")
+                box = page.locator("#chat-input, textarea").first
+                await box.or_(page.locator("input[type=password]")).first.wait_for(timeout=30_000)
+                if "sign_in" in page.url or not await box.count():
+                    _block(key, "chat", 86400, "signed out — reconnect DeepSeek in Settings → Job sites")
+                    return ""
+                await box.fill(prompt)
+                await box.press("Enter")
+                answers = page.locator(".ds-markdown")
+                await answers.first.wait_for(timeout=60_000)
+                text, same_for, deadline = "", 0, time.monotonic() + 300
+                while same_for < 3 and time.monotonic() < deadline:  # done once the text stops growing
+                    await asyncio.sleep(1.5)
+                    now = await answers.last.inner_text()
+                    same_for = same_for + 1 if now and now == text else 0
+                    text = now
+            finally:
+                await context.close()
+        return _json_part(text) if json_mode else text
+    except Exception as exc:
+        logger.warning("AI DeepSeek chat failed: %s", exc)
+        _block(key, "chat", 600, "page failed")  # don't open a browser for every request while it's broken
         return ""
 
 
@@ -377,7 +436,9 @@ async def generate(prompt: str, providers: List[Dict[str, str]], ollama_model: s
     """
     gemini_models = GEMINI_LITE_MODELS + GEMINI_MODELS if light else GEMINI_MODELS + GEMINI_LITE_MODELS
     if prefer_local and providers:  # "local models + AI key": this computer first, the cloud as backup
-        text = await chat([{"role": "user", "content": prompt}], ollama_model, ollama_url, json_mode, timeout)
+        # short turn: CPU-only Ollama took up to 5 min per form question, so a live fill sat "doing nothing"
+        text = await chat([{"role": "user", "content": prompt}], ollama_model, ollama_url, json_mode,
+                          min(timeout, LOCAL_FIRST_TIMEOUT_S))
         if text:
             return text, "local model"
     for p in providers:
@@ -386,6 +447,8 @@ async def generate(prompt: str, providers: List[Dict[str, str]], ollama_model: s
 
             config = types.GenerateContentConfig(response_mime_type="application/json") if json_mode else None
             text = await _gemini_generate(p["key"], prompt, config, gemini_models)
+        elif p["kind"] == "deepseek_web":
+            text = await _deepseek_web(p, prompt, json_mode)
         else:
             text = await _openai_chat(p, prompt, json_mode)
         if text:

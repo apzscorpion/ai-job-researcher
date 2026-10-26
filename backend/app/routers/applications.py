@@ -334,7 +334,7 @@ def mark_applied(
 REASONS = [
     ("unconfirmed", r"no confirmation", "Sent, but the site didn't confirm",
      "The AI pressed Submit but no 'thank you' page appeared.", "Check your email for a confirmation.", False),
-    ("closed", r"expired|no longer accepting|job is closed", "Job closed",
+    ("closed", r"expired|no longer accepting|not currently accepting|job is closed", "Job closed",
      "The employer stopped taking applications.", "Nothing to do — cancel it.", False),
     ("captcha", r"captcha|cloudflare|verify you are human|human verification", "Human check (captcha)",
      "The site asked to prove a person is there; the AI never solves these.",
@@ -418,7 +418,7 @@ class StatusUpdate(BaseModel):
     status: str
 
 
-VALID_STATUSES = {"queued", "draft", "applied", "needs_manual", "failed", "replied", "skipped"}
+VALID_STATUSES = {"queued", "draft", "applied", "needs_manual", "failed", "replied", "skipped", "cancelled"}
 
 
 @router.put("/{app_id}/status")
@@ -494,17 +494,23 @@ def cancel_application(
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ) -> Dict[str, Any]:
-    """Cancel an application that hasn't been sent; the job goes back to "Not applied yet"."""
+    """Cancel an application that hasn't been sent: it stays as "cancelled" with the reason it stopped,
+    and the job shows under "Cancelled apply" (never re-queued)."""
     app = session.get(Application, app_id)
     if not app or app.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Application not found")
     if app.status in ("applied", "replied"):
         raise HTTPException(status_code=409, detail="Already sent — it can't be taken back from here")
+    if app.status == "cancelled":
+        return {"cancelled": app_id}
     if app.status == "applying":
         raise HTTPException(status_code=409, detail="It's being sent right now — wait a minute and check again")
-    session.delete(app)
+    was = app.status
+    app.status = "cancelled"
+    app.notes = (app.notes or "").strip() or "Cancelled by you — no reason was recorded."  # the AI's own words
+    session.add(app)
     session.add(ActivityLog(user_id=current_user.id, event="application_cancelled",
-                            detail=f"Application {app_id} for job_id={app.job_id} was {app.status}"))
+                            detail=f"Application {app_id} for job_id={app.job_id} was {was}"))
     session.commit()
     return {"cancelled": app_id}
 

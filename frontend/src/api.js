@@ -186,7 +186,7 @@ export const remoteSignIn = {
   status: () => apiFetch('/settings/job-sites/remote/status'),
   frame:  () => apiFetch('/settings/job-sites/remote/frame', { raw: true }),
   input:  body => apiFetch('/settings/job-sites/remote/input', { method: 'POST', body: JSON.stringify(body) }),
-  close:  () => apiFetch('/settings/job-sites/remote/close', { method: 'POST' }),
+  close:  () => apiFetch('/settings/job-sites/remote/close', { method: 'POST', keepalive: true }),  // keepalive: still sent as the tab closes
 }
 
 // Reads every saved browser profile: slow-ish (a few seconds)

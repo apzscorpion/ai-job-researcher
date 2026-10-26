@@ -25,7 +25,12 @@ from app.models import Job, Profile, Settings, json_decode
 
 logger = logging.getLogger(__name__)
 
-MAX_STEPS = 14
+MAX_STEPS = 40  # long multi-page forms; a stuck page stops it sooner (_STUCK_STEPS)
+_STUCK_STEPS = 4
+# the posting itself says it's closed: read from the page, never left to the model
+_CLOSED = re.compile(r"(no longer|not currently) accepting applications|this job (is|has been) closed|"
+                     r"(job|position|posting) (has )?(expired|been filled)|applications? (are |is )?closed", re.I)
+CLOSED_NOTE = "This job is closed"
 _CAPTCHA = "iframe[src*='recaptcha/api2/bframe'], iframe[src*='hcaptcha'], iframe[src*='challenges.cloudflare'], #captcha"
 _CONFIRM = re.compile(
     r"thank(s| you),? for (applying|your (application|interest|submission))|application (has been |was )?"
@@ -49,6 +54,8 @@ _OBSERVE_JS = r"""
     for (let i = 0; i < 3 && p; i++, p = p.parentElement) { const x = (p.innerText || '').trim(); if (x && x.length < 200) return x; }
     return '';
   };
+  // ids from earlier steps must go: a hidden old field keeping "f0e12" got the new f0e12's value
+  document.querySelectorAll('[data-agent-id]').forEach(e => e.removeAttribute('data-agent-id'));
   const out = [];
   let n = 0;
   for (const e of document.querySelectorAll(sel)) {
@@ -151,9 +158,10 @@ def _parse_plan(raw: str) -> Dict[str, Any]:
     return plan if isinstance(plan, dict) and ("status" in plan or "actions" in plan) else {}
 
 
-async def _observe(page) -> Tuple[str, Dict[str, Any]]:
-    """Text for the LLM plus {element id: frame} for acting on it."""
+async def _observe(page) -> Tuple[str, Dict[str, Any], Dict[str, Dict[str, Any]]]:
+    """Text for the LLM, {element id: frame} for acting on it, and {element id: its description}."""
     frames: Dict[str, Any] = {}
+    elements: Dict[str, Dict[str, Any]] = {}
     snaps: List[Dict[str, Any]] = []
     for i, frame in enumerate(page.frames[:6]):
         try:
@@ -162,8 +170,28 @@ async def _observe(page) -> Tuple[str, Dict[str, Any]]:
             continue
         for el in snap["elements"]:
             frames[el["id"]] = frame
+            elements[el["id"]] = el
         snaps.append(snap)
-    return format_obs(snaps), frames
+    return format_obs(snaps), frames, elements
+
+
+def _words(text: str) -> set:
+    return {w for w in re.findall(r"[a-z0-9]+", (text or "").lower()) if len(w) > 2}
+
+
+def field_matches(field: str, element: Dict[str, Any]) -> bool:
+    """The model's "field" (the label it means) shares a word with the element's own label / text.
+
+    Lenient on purpose (labels are long, models paraphrase); it only stops a value going into a box that
+    asks something else, e.g. the phone number into "Email".
+    """
+    mine = _words(f"{element.get('label', '')} {element.get('text', '')}")
+    meant = _words(field)
+    return not meant or not mine or bool(meant & mine)
+
+
+# a click on these leaves the page as it was; any other click / key press may open the next page
+_IN_PLACE = {"checkbox", "radio", "option", "tab"}
 
 
 def _host(page) -> str:
@@ -194,6 +222,8 @@ _SOURCE_NAMES = {"linkedin": "LinkedIn", "naukri": "Naukri", "indeed": "Indeed",
 
 def _prompt(goal: str, job: Job, candidate: str, resume: str, cover_letter: str, history: List[str], obs: str,
             answers: List[str] = (), file_keys: Dict[str, str] = None, allow_ask: bool = False) -> str:
+    from app.services.browser_apply import salary_rule
+
     source = _SOURCE_NAMES.get(job.source or "", "Online job board")
     files = "\n".join(f'- "{k}": {v}' for k, v in (file_keys or {}).items()) or "(none besides resume / cover_letter)"
     told = "\n".join(f"- {a}" for a in answers) or "(none yet)"
@@ -203,7 +233,7 @@ def _prompt(goal: str, job: Job, candidate: str, resume: str, cover_letter: str,
                     'never stop for it')
     return f"""You are an autonomous job-application agent operating a web browser for the candidate.
 GOAL: {goal}
-Job: "{job.title}" at {job.company}.
+Job: "{job.title}" at {job.company}, location: {job.location or "unknown"}.
 
 Candidate data (use exactly; never invent personal facts):
 {candidate}
@@ -228,8 +258,9 @@ How to work:
 - Fill every required field (and obvious optional ones like LinkedIn URL). For questions not covered by the
   data, answer as the candidate would, professionally (motivation: 2 formal sentences from the résumé;
   how did you hear: "{source}"; demographic questions: "Prefer not to say"/"Decline").
-- Salary (current or expected), notice period in days and other figures: ONLY from standard_answers or what
-  the candidate told you. If a required one (or any required fact or document) is missing, {missing_rule}.
+- {salary_rule(job.location or "")}
+- Notice period in days and other figures: ONLY from standard_answers or what the candidate told you.
+  If a required one (or any required fact or document) is missing, {missing_rule}.
 - Location / city autocompletes: type the candidate's city; if the list doesn't offer it, choose the
   nearest larger city that is listed in the same state/country (e.g. a district town → the state's main city).
 - Education and employment questions: use the "education" and "work_history" data (school, degree,
@@ -243,6 +274,11 @@ How to work:
   never fill or choose it again. Read "Actions so far": if an action failed, try something different
   (another option text, "Other", or ask) instead of repeating it.
 - Upload files with {{"type":"upload","id":..,"file":"resume"}} ("cover_letter", or a key from the list above).
+- Read the whole form first, then match each value to the element whose OWN label asks for it. Put that
+  label in "field" for every action; an action whose "field" doesn't match the element's label is skipped.
+  Never put a value into a box that asks something else.
+- Fill and choose first; clicks that change the page (Next, Continue, Review, Submit) go LAST in the list —
+  after one, the rest of the list is dropped and you see the new page.
 - Submit when everything required is filled.
 - STOP with status "need_human" for: captcha or "verify you are human", login or account creation /
   sign-up (never fill a sign-up form), password, email/OTP verification, payment. STOP with "cannot_apply" if the job is closed or the
@@ -263,6 +299,7 @@ Reply with ONLY JSON:
 {{"status": "continue" | "applied" | "need_human" | "cannot_apply"{' | "ask"' if allow_ask else ''},
   "reason": "<one short sentence>",{' "question": "<only with ask>",' if allow_ask else ''}
   "actions": [{{"type": "click"|"fill"|"choose"|"select"|"check"|"upload"|"press"|"wait", "id": "<element id>",
+               "field": "<that element's label / button text>",
                "value": "<text / option / key like Enter>", "file": "resume"|"cover_letter"}}]}}
 At most 8 actions; an empty list when status is not "continue"."""
 
@@ -284,6 +321,9 @@ async def _act(page, frames: Dict[str, Any], action: Dict[str, Any], files: Dict
             await el.press_sequentially(value[:2000], delay=20)
         else:
             await el.fill(value[:2000], timeout=8_000)
+            shown = await el.input_value(timeout=3_000)
+            if " ".join(shown.split()) != " ".join(value[:2000].split()):  # masked / reformatted / rejected
+                return f"fill {el_id} = {value[:60]!r}, but the box now shows {shown[:60]!r} — check it"
     elif kind == "select":
         try:
             await el.select_option(label=value, timeout=5_000)
@@ -334,6 +374,7 @@ async def agent_apply(page, job: Job, profile: Profile, settings: Settings, goal
     claimed = False
     context = page.context
     last_host = None
+    seen: List[str] = []  # recent observations: the same page again and again means the agent is stuck
     for step in range(MAX_STEPS):
         if gate:
             await gate()  # the user pressed Pause: wait here, then look at the page fresh
@@ -349,12 +390,19 @@ async def agent_apply(page, job: Job, profile: Profile, settings: Settings, goal
         body = await page.locator("body").inner_text()
         if _CONFIRM.search(body):
             return "applied", f"Applied on {_host(page)} — the site confirmed the application (AI agent)."
+        closed = _CLOSED.search(body)
+        if closed:
+            return "needs_manual", f"{CLOSED_NOTE}: the page says \"{closed.group(0)}\". Nothing to apply to ({page.url})"
         if await page.locator("input[type=password]:visible").count() > 0:
             # never type or invent passwords, whatever the model says
             return "needs_manual", (f"{_host(page)} wants you to log in or create an account. Sign in there "
                                     f"(Settings → Job sites → Connect) and retry, or finish here: {page.url}")
 
-        obs, frames = await _observe(page)
+        obs, frames, elements = await _observe(page)
+        seen = (seen + [obs])[-_STUCK_STEPS:]
+        if len(seen) == _STUCK_STEPS and len(set(seen)) == 1:
+            return "needs_manual", (f"The AI agent was stuck: the page didn't change in {_STUCK_STEPS} steps "
+                                    f"({history[-1] if history else 'no actions'}). Finish it here: {page.url}")
         plan, used = await plan_step(job, profile, settings, goal, cover_letter, email, history, obs,
                                      answers, file_keys, allow_ask)
         if not plan:
@@ -383,10 +431,17 @@ async def agent_apply(page, job: Job, profile: Profile, settings: Settings, goal
         for action in (plan.get("actions") or [])[:8]:
             if gate and await gate():
                 break  # paused mid-plan: the page may have changed, so re-read it instead of continuing
+            el = elements.get(str(action.get("id", "")), {})
+            if el and action.get("type") != "wait" and not field_matches(str(action.get("field") or ""), el):
+                history.append(f"step {step}: skipped {action.get('type')} {action.get('id')} — it is "
+                               f"{(el.get('label') or el.get('text') or '')[:60]!r}, not {action.get('field')!r}")
+                continue
             try:
                 history.append(f"step {step}: " + await _act(page, frames, action, files))
             except Exception as exc:
                 history.append(f"step {step}: {action.get('type')} {action.get('id')} failed: {str(exc)[:80]}")
             await asyncio.sleep(0.6)
+            if action.get("type") == "press" or (action.get("type") == "click" and el.get("type") not in _IN_PLACE):
+                break  # the page may have changed: the remaining ids could point at other fields now
         await asyncio.sleep(2)
     return "needs_manual", f"The AI agent couldn't finish in {MAX_STEPS} steps. Finish it here: {page.url}"
