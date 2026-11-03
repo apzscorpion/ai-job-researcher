@@ -43,6 +43,8 @@ export async function apiFetch(path, options = {}) {
     try {
       const errData = await response.json()
       errMsg = errData.detail || errData.message || errData.error || errMsg
+      // validation errors come as a list: "daily_cap: Input should be less than or equal to 500"
+      if (Array.isArray(errMsg)) errMsg = errMsg.map(e => `${(e.loc || []).slice(-1)[0]}: ${e.msg}`).join('; ')
     } catch {
       // ignore json parse error; keep the HTTP status string
     }

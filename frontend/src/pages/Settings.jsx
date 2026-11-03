@@ -335,10 +335,21 @@ export default function Settings() {
   async function handleConnect(platform) {
     setConnectMsg(''); setConnectErr('')
     setConnectingPlatform(platform)
+    const name = sites.find(s => s.id === platform)?.name || platform
+    // On the app's own PC a real Chrome window opens on the desktop; the live view is for visitors elsewhere
+    if (['localhost', '127.0.0.1'].includes(window.location.hostname)) {
+      try {
+        const res = await connectJobSite(platform, false)
+        setConnectMsg(res.remote
+          ? `Sign in to ${name} in the live view, then click “Sync all”.`
+          : `A Chrome window opened for ${name} — sign in there, close it when done, then click “Sync all”.`)
+      } catch (err) { setConnectErr(err.message) }
+      finally { setConnectingPlatform(null) }
+      return
+    }
     const tab = window.open('', '_blank')  // before the await, or the browser blocks the new tab
     try {
       await connectJobSite(platform, true)
-      const name = sites.find(s => s.id === platform)?.name || platform
       const url = `/connect?name=${encodeURIComponent(name)}`
       if (tab && !tab.closed) tab.location.href = url
       else window.location.href = url

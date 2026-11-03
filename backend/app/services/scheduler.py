@@ -164,6 +164,7 @@ async def _alert_user(settings, user_id: int, subject: str, body: str) -> None:
 # Far below the volumes that get accounts restricted; spread through the day by the gap below
 PLATFORM_DAILY_CAP = {"linkedin": 15, "naukri": 10}
 # Random wait between two applications on the same site (seconds)
+APPLY_TIMEOUT_S = 20 * 60  # one application, start to finish
 PLATFORM_GAP_S = (60, 75)  # the user asked for ~1 minute between applications on one platform
 
 
@@ -245,8 +246,10 @@ def platform_block(session, user_id: int, settings, route: str, now_utc: datetim
     return None
 
 
-async def apply_now(app_id: int, route: str) -> None:
-    """Apply to one job right away (the user clicked Apply on its card)."""
+async def apply_now(app_id: int, route: str, find_email: bool = False) -> None:
+    """Apply to one job right away (the user clicked Apply on its card, or the queue picked it)."""
+    import asyncio
+
     from sqlmodel import Session, select
 
     from app.db import engine
@@ -262,8 +265,17 @@ async def apply_now(app_id: int, route: str) -> None:
         profile = session.exec(select(Profile).where(Profile.user_id == app.user_id)).first()
         user = session.get(User, app.user_id)
         try:
-            await _apply_one(session, app, job, app.user_id, settings, profile,
-                             settings.smtp_from or (user.email if user else ""), route, now_utc)
+            # a hung page (or the PC sleeping mid-apply) must not hold its slot for hours
+            await asyncio.wait_for(_apply_one(session, app, job, app.user_id, settings, profile,
+                                              settings.smtp_from or (user.email if user else ""), route, now_utc,
+                                              find_email), APPLY_TIMEOUT_S)
+        except asyncio.TimeoutError:
+            logger.warning("scheduler: app_id=%s timed out after %ss", app.id, APPLY_TIMEOUT_S)
+            session.rollback()
+            app.status = "failed"
+            app.notes = f"Took over {APPLY_TIMEOUT_S // 60} minutes (the page hung), so it was stopped. Apply here: {job.url}"
+            session.add(app)
+            session.commit()
         finally:
             session.refresh(app)
             if app.status == "applying":  # e.g. the site paused itself: keep it for the queue
@@ -337,7 +349,7 @@ def _already_applied(session, user_id: int, app, job) -> Optional[str]:
 
 
 async def _apply_one(session, app, job, user_id: int, settings, profile, user_email: str,
-                     route: str, now_utc: datetime) -> None:
+                     route: str, now_utc: datetime, find_email: bool = False) -> None:
     """Apply to one queued job and record a plain-English outcome."""
     from app.models import ActivityLog
     from app.services import browser_apply
@@ -352,6 +364,17 @@ async def _apply_one(session, app, job, user_id: int, settings, profile, user_em
         session.add(app)
         session.commit()
         return
+    if find_email and route != "email":  # email first: it needs no browser and a local model can write it
+        try:
+            from app.services.email_finder import find_hiring_email
+
+            found = await find_hiring_email(job)
+        except Exception:
+            logger.exception("scheduler: email finder failed for job_id=%s", job.id)
+            found = None
+        if found:
+            job.recruiter_email, route, app.method = found, "email", "email"
+            session.add(job)
     try:
         if route == "email":
             status, note = await _apply_email(app, job, profile, settings, providers, job.recruiter_email)
@@ -483,7 +506,7 @@ async def _process_apply_queue() -> None:
             session.commit()
             # Different platforms apply at the same time, each in its own browser and DB session
             for app, route, group in chosen:
-                task = asyncio.create_task(apply_now(app.id, route))
+                task = asyncio.create_task(apply_now(app.id, route, find_email=True))
                 _tasks.add(task)
                 task.add_done_callback(_tasks.discard)
                 task.add_done_callback(lambda _t, k=(user_id, group): _group_done.__setitem__(k, time.monotonic()))

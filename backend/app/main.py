@@ -9,8 +9,9 @@ import os
 from datetime import datetime
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 
 import app.config  # noqa: F401  (loads .env, creates data dirs)
 from app.db import create_db_and_tables
@@ -98,7 +99,7 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 
 from app.auth import get_current_user  # noqa: E402
-from app.routers import auth, profile, settings, jobs, applications, notifications  # noqa: E402
+from app.routers import auth, profile, settings, jobs, applications, notifications, brain  # noqa: E402
 
 app.include_router(auth.router)
 app.include_router(profile.router)
@@ -106,6 +107,7 @@ app.include_router(settings.router)
 app.include_router(jobs.router)
 app.include_router(applications.router)
 app.include_router(notifications.router)
+app.include_router(brain.router)
 
 
 # ---------------------------------------------------------------------------
@@ -141,6 +143,23 @@ def health() -> dict:
     return {"status": "ok"}
 
 
+@app.get("/sw.js", include_in_schema=False)
+def service_worker_fallback():
+    # Absorb cached browser service worker requests cleanly
+    return Response(content="", media_type="application/javascript")
+
+
+@app.websocket("/ws/chat")
+async def dummy_ws_chat(websocket: WebSocket):
+    # Absorb browser / extension chat reconnect loops cleanly
+    await websocket.accept()
+    try:
+        while True:
+            await websocket.receive_text()
+    except Exception:
+        pass
+
+
 @app.get("/api/logs", tags=["meta"])
 def get_logs(current_user=Depends(get_current_user)) -> dict:
     # Server logs mix every user's activity: only the operator (ADMIN_EMAILS in .env) may read them
@@ -149,4 +168,3 @@ def get_logs(current_user=Depends(get_current_user)) -> dict:
     if not is_admin(current_user):
         raise HTTPException(status_code=403, detail="Server logs are only available to the app's admin")
     return {"logs": list(_LOG_BUFFER)}
-

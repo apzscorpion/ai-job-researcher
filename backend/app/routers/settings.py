@@ -175,7 +175,7 @@ class SettingsUpdate(BaseModel):
     score_threshold: Optional[Annotated[int, Field(ge=0, le=10)]] = None
     use_gemini_scoring: Optional[bool] = None
     ai_mode: Optional[Literal["full_ai", "semi_ai", "local_plus_ai", "local_only"]] = None
-    daily_cap: Optional[Annotated[int, Field(ge=0, le=100)]] = None
+    daily_cap: Optional[Annotated[int, Field(ge=0, le=500)]] = None  # LinkedIn/Naukri keep their own caps
     apply_start_hour: Optional[Annotated[int, Field(ge=0, le=23)]] = None
     apply_end_hour: Optional[Annotated[int, Field(ge=1, le=24)]] = None
     search_interval_hours: Optional[Annotated[int, Field(ge=1, le=168)]] = None

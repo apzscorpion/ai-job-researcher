@@ -16,6 +16,7 @@ predict(model, job_emb, matched, missing, title_fit, remote) -> score 0..10
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -94,8 +95,8 @@ async def train(user_id: int, session) -> Optional[Dict[str, Any]]:
     from app.config import EMBED_MODEL, OLLAMA_URL
     from app.models import Job, Profile, json_decode, json_encode
     from app.services import llm
-    from app.services.matcher import selected_skills, skill_match
-    from app.services.sources import relevant, resume_titles
+    from app.services.matcher import selected_skills
+    from app.services.sources import resume_titles
 
     profile = session.exec(select(Profile).where(Profile.user_id == user_id)).first()
     if not profile or not profile.resume_text:
@@ -106,7 +107,7 @@ async def train(user_id: int, session) -> Optional[Dict[str, Any]]:
     skills, titles = selected_skills(profile), resume_titles(profile)
     jobs = session.exec(select(Job).where(Job.user_id == user_id, Job.status == "scored",
                                           col(Job.score).is_not(None))).all()
-    rows, y = [], []
+    examples = []
     for job in jobs:
         if (job.score_source or "ai") not in ("ai", "local_llm"):  # learn from an LLM, never from its own guesses
             continue
@@ -116,15 +117,25 @@ async def train(user_id: int, session) -> Optional[Dict[str, Any]]:
             if emb:
                 job.embedding = json_encode(emb)
                 session.add(job)
-        if not emb:
-            continue
-        matched, missing = skill_match(skills, job.title + "\n" + (job.description or ""))
-        title_fit = relevant({"title": job.title, "description": ""}, titles, skills)
-        rows.append((emb, len(matched), len(missing), title_fit, bool(job.is_remote)))
-        y.append(float(job.score))
+        if emb:
+            examples.append((emb, job.title, job.description or "", bool(job.is_remote), float(job.score)))
     session.commit()
-    if len(y) < MIN_EXAMPLES:
+    if len(examples) < MIN_EXAMPLES:
         return None
+    # skill matching over every description + the fit take a minute of CPU: off the server's event loop
+    return await asyncio.to_thread(_train_sync, user_id, resume_emb, examples, skills, titles)
+
+
+def _train_sync(user_id: int, resume_emb, examples, skills, titles) -> Dict[str, Any]:
+    from app.services.matcher import skill_match
+    from app.services.sources import relevant
+
+    rows, y = [], []
+    for emb, title, description, is_remote, score in examples:
+        matched, missing = skill_match(skills, title + "\n" + description)
+        title_fit = relevant({"title": title, "description": ""}, titles, skills)
+        rows.append((emb, len(matched), len(missing), title_fit, is_remote))
+        y.append(score)
 
     E = np.vstack([_unit(r[0]) for r in rows])
     emb_mean = E.mean(0)

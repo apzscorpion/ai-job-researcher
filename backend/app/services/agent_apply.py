@@ -130,10 +130,16 @@ async def plan_step(job: Job, profile: Profile, settings: Settings, goal: str, c
 
     prompt = _prompt(goal, job, _candidate(profile, settings, email, cover_letter), profile.resume_text or "",
                      cover_letter, history, obs, answers or [], file_keys or {}, allow_ask)
+    from app.services import brain
+
     used = ""
     for _attempt in range(2):  # a reply that isn't valid JSON gets one retry
-        raw, used = await generate(prompt, providers_for(settings), OLLAMA_MODEL, OLLAMA_URL,
-                                   json_mode=True, timeout=180)
+        # the user's Claude Code session (apply-jobs skill) answers first; the AI keys if it doesn't in time
+        raw = await brain.ask(settings.user_id, prompt) if brain.connected(settings.user_id) else ""
+        used = "Claude Code"
+        if not raw:
+            raw, used = await generate(prompt, providers_for(settings), OLLAMA_MODEL, OLLAMA_URL,
+                                       json_mode=True, timeout=180)
         plan = _parse_plan(raw)
         if plan:
             return plan, used
@@ -313,6 +319,13 @@ async def _act(page, frames: Dict[str, Any], action: Dict[str, Any], files: Dict
     if frame is None:
         return f"{kind} {el_id}: no such element"
     el = frame.locator(f"[data-agent-id='{el_id}']").first
+
+    async def remark() -> None:
+        # the form re-rendered (often on typing) and dropped our marks: mark it again (same DOM order → same ids)
+        if not await el.count() and re.match(r"f\d+e", el_id):
+            await frame.evaluate(_OBSERVE_JS, re.match(r"f\d+e", el_id).group(0))
+
+    await remark()
     if kind == "click":
         await el.click(timeout=8_000)
     elif kind == "fill":
@@ -321,6 +334,7 @@ async def _act(page, frames: Dict[str, Any], action: Dict[str, Any], files: Dict
             await el.press_sequentially(value[:2000], delay=20)
         else:
             await el.fill(value[:2000], timeout=8_000)
+            await remark()
             shown = await el.input_value(timeout=3_000)
             if " ".join(shown.split()) != " ".join(value[:2000].split()):  # masked / reformatted / rejected
                 return f"fill {el_id} = {value[:60]!r}, but the box now shows {shown[:60]!r} — check it"
