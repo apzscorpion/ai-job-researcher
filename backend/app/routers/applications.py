@@ -590,6 +590,7 @@ def stats_today(
     from collections import Counter
 
     from app.services.llm import ai_mode, quota_status
+    from app.services import resources
     from app.services.scheduler import PLATFORM_DAILY_CAP, active_pauses, route_for
 
     now = datetime.now(timezone.utc)
@@ -619,6 +620,7 @@ def stats_today(
         "draft_count": count(Application.status == "draft"),
         "readiness": {
             "auto_apply": bool(settings and settings.auto_apply_enabled),
+            "system": resources.status(),
             "email_ready": bool(settings and settings.smtp_host and settings.smtp_from and settings.smtp_password_enc),
             "auto_send_email": bool(settings and settings.auto_send_email),
             "ai_providers": len(providers_for(settings)) if settings else 0,

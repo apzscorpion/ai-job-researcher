@@ -38,6 +38,10 @@ async def chat(messages: List[Dict[str, str]], model: str, url: str, json_mode: 
 
     Returns the assistant message content, or an empty string on failure.
     """
+    from app.services import resources
+
+    if resources.paused():  # the PC is hot / busy: callers fall back to the cloud AIs or try later
+        return ""
     payload: Dict[str, Any] = {
         "model": model,
         "messages": messages,
@@ -66,7 +70,9 @@ async def embed(text: str, model: str, url: str) -> List[float]:
 
     Returns an empty list on failure.
     """
-    if not text.strip():
+    from app.services import resources
+
+    if not text.strip() or resources.paused():
         return []
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:

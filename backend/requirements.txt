@@ -20,3 +20,4 @@ numpy>=1.26.0
 email-validator>=2.0.0
 tzdata>=2024.1
 ddgs>=9.16
+psutil>=7.0

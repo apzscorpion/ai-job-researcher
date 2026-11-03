@@ -516,8 +516,11 @@ async def _process_apply_queue() -> None:
 
 async def _recheck_borderline() -> None:
     """Keep the local LLM busy on borderline jobs, one at a time (a run lasts ~2-3 min per job)."""
+    from app.services import resources
     from app.services.matcher import recheck_borderline
 
+    if resources.paused():  # PC hot / busy: an empty reply here would mark jobs "re-check failed"
+        return
     try:
         for _ in range(3):
             if not await recheck_borderline():
@@ -580,6 +583,18 @@ def start_scheduler() -> None:
             trigger=IntervalTrigger(minutes=2),
             id="recheck_job",
             name="Local-LLM re-check of borderline scores",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+
+        from app.services import resources
+
+        _scheduler.add_job(
+            resources.check,
+            trigger=IntervalTrigger(seconds=30),
+            id="resource_guard",
+            name="CPU / RAM / temperature guard for the local models",
             replace_existing=True,
             max_instances=1,
             coalesce=True,

@@ -35,6 +35,7 @@ export default function StatusHeader() {
   const queued = r.queued_by_route || {}
   const ai = r.ai_quota || []
   const aiOut = ai.filter(p => p.out)
+  const sys = r.system || {}
 
   return (
     <div className="status-header" role="status" aria-live="polite">
@@ -76,6 +77,15 @@ export default function StatusHeader() {
                   : p.blocked.length ? `${p.models - p.blocked.length}/${p.models} models available` : 'OK'}
               </Chip>
             ))}
+      {sys.cpu != null && (
+        <Chip tone={sys.paused ? 'bad' : sys.cpu >= 70 || sys.ram >= 80 ? 'warn' : 'ok'}
+          title={sys.paused
+            ? 'Local models are unloaded until the PC calms down; cloud AI and email keep working'
+            : `CPU used by other apps: ${sys.other_cpu}%. Temperature needs LibreHardwareMonitor running as admin.`}>
+          🌡 CPU {sys.cpu}% · RAM {sys.ram}% · {sys.temp != null ? `${sys.temp}°C` : 'temp n/a'}
+          {sys.paused ? ` — local models paused (${sys.reason})` : ''}
+        </Chip>
+      )}
       {msg && <span className="status-msg">{msg}</span>}
     </div>
   )
