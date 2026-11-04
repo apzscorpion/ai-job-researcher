@@ -4,7 +4,7 @@
   python scripts/brain.py answer <id>     -> reads the JSON answer from stdin
 
 Signs in as the first ADMIN_EMAILS account (or --email) with the server's own key: run it on the app's PC.
-API defaults to http://127.0.0.1:8000 (env API).
+API defaults to http://127.0.0.1:8317 (env API).
 """
 import json
 import os
@@ -32,7 +32,7 @@ def _token(email: str) -> str:
 
 
 def _call(path: str, token: str, body=None):
-    req = urllib.request.Request(os.environ.get("API", "http://127.0.0.1:8000") + path,
+    req = urllib.request.Request(os.environ.get("API", "http://127.0.0.1:8317") + path,
                                  data=json.dumps(body).encode() if body is not None else None,
                                  headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=70) as resp:
@@ -50,7 +50,7 @@ def main() -> None:
         print(f"ID {got['id']}\n{got['prompt']}" if got["id"] else "NONE")
     elif args[:1] == ["answer"] and len(args) >= 2:
         try:
-            _call(f"/api/brain/answer/{args[1]}", token, {"text": sys.stdin.read()})
+            _call(f"/api/brain/answer/{args[1]}", token, {"text": sys.stdin.buffer.read().decode("utf-8")})  # Windows stdin isn't UTF-8
             print("OK")
         except urllib.error.HTTPError as exc:
             print(f"LATE ({exc.code}): the step timed out; the app used its own AI for it")

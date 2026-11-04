@@ -169,6 +169,8 @@ export async function connectJobSite(site, remote = false) {
 export const assistApi = {
   start:       (appId, review) => apiFetch(`/applications/${appId}/assist?review=${review ? 'true' : 'false'}`, { method: 'POST' }),
   fromLink:    body  => apiFetch('/applications/from-link', { method: 'POST', body: JSON.stringify(body) }),
+  // a pasted reply / instruction / link: the server finds the application link and the job it's about
+  fromMessage: body  => apiFetch('/applications/from-message', { method: 'POST', body: JSON.stringify(body) }),
   status:      ()    => apiFetch('/applications/assist/status'),
   resume:      ()    => apiFetch('/applications/assist/continue', { method: 'POST' }),
   close:       ()    => apiFetch('/applications/assist/close', { method: 'POST' }),

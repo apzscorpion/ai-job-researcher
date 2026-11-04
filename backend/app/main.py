@@ -88,7 +88,7 @@ app.add_middleware(
     CORSMiddleware,
     # Production: set ALLOWED_ORIGINS=https://your-domain in .env (comma-separated)
     allow_origins=[o.strip() for o in os.environ.get(
-        "ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:3000").split(",") if o.strip()],
+        "ALLOWED_ORIGINS", "http://localhost:5317,http://localhost:3000").split(",") if o.strip()],
     allow_credentials=False,  # auth is a bearer header, not cookies
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
     allow_headers=["Authorization", "Content-Type", "ngrok-skip-browser-warning"],

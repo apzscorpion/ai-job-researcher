@@ -17,6 +17,7 @@ import asyncio
 import logging
 import random
 import re
+import unicodedata
 from typing import List, Optional, Tuple
 
 from app.config import OLLAMA_MODEL, OLLAMA_URL
@@ -53,9 +54,11 @@ async def human_type(page, selector: str, text: str) -> None:
 
 def pick_option(answer: str, options: List[str]) -> str:
     """The option matching *answer* exactly, else the one containing it (or contained in it); "" if none."""
-    a = answer.strip().lower()
-    exact = next((o for o in options if o.strip().lower() == a), None)
-    return exact or next((o for o in options if a and (a in o.lower() or o.strip().lower() in a)), "")
+    # accents don't count: "Pathanamthitta" picks "Pathanāmthitta, Kerala, India"
+    norm = lambda s: unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode().strip().lower()
+    a = norm(answer)
+    exact = next((o for o in options if norm(o) == a), None)
+    return exact or next((o for o in options if a and (a in norm(o) or norm(o) in a)), "")
 
 
 def salary_rule(job_location: str) -> str:

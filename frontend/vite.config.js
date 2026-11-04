@@ -32,9 +32,11 @@ export default defineConfig({
   plugins: [react(), cspMeta],
   build: { sourcemap: false },
   server: {
+    port: 5317,  // 5173 and 8000 belong to other apps on this PC
+    strictPort: true,
     proxy: {
       '/api': {
-        target: process.env.API_PROXY || 'http://127.0.0.1:8000',
+        target: process.env.API_PROXY || 'http://127.0.0.1:8317',
         changeOrigin: true,
       }
     }

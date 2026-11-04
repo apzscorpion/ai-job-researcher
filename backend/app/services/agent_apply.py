@@ -35,15 +35,19 @@ _CAPTCHA = "iframe[src*='recaptcha/api2/bframe'], iframe[src*='hcaptcha'], ifram
 _CONFIRM = re.compile(
     r"thank(s| you),? for (applying|your (application|interest|submission))|application (has been |was )?"
     r"(received|submitted|sent|successful)|we('ve| have) received your application|successfully (applied|submitted)|"
-    r"you('ve| have) applied|applied successfully", re.I)
+    r"you('ve| have) applied|applied successfully|applied to [\"“]", re.I)  # Naukri: Applied to "<title>"
 
 # Marks every visible interactive element (main page and iframes) with data-agent-id and describes it
 _OBSERVE_JS = r"""
 (prefix) => {
   const sel = 'input:not([type=hidden]), textarea, select, button, a[href], [role=button], [role=link], ' +
-              '[role=combobox], [role=option], [role=checkbox], [role=radio], [role=tab], [contenteditable=true]';
-  const visible = e => { const r = e.getBoundingClientRect(); const s = getComputedStyle(e);
-    return (r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none') || e.type === 'file'; };
+              '[role=combobox], [role=option], [role=checkbox], [role=radio], [role=tab], [contenteditable=true], ' +
+              '.sendMsg, .chatbot_SendButton';  // Naukri's chatbot "Save" is a plain div
+  const shown = e => { const r = e.getBoundingClientRect(); const s = getComputedStyle(e);
+    return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'; };
+  // styled radios/checkboxes hide the real input and show its <label> instead
+  const visible = e => shown(e) || e.type === 'file' || (['checkbox', 'radio'].includes(e.type)
+    && [...(e.labels || [])].some(shown));
   const labelOf = e => {
     const id = e.id && document.querySelector(`label[for="${CSS.escape(e.id)}"]`);
     const by = e.getAttribute('aria-labelledby');
@@ -65,11 +69,15 @@ _OBSERVE_JS = r"""
     const tag = e.tagName.toLowerCase();
     const d = { id, tag, type: e.type || e.getAttribute('role') || '' };
     const text = (e.innerText || e.value || '').trim().replace(/\s+/g, ' ').slice(0, 80);
-    if (['button', 'a'].includes(tag) || ['button', 'link', 'tab', 'option'].includes(e.getAttribute('role'))) {
+    if (['button', 'a'].includes(tag) || ['button', 'link', 'tab', 'option'].includes(e.getAttribute('role'))
+        || e.matches('.sendMsg, .chatbot_SendButton')) {
+      if (tag === 'div') d.type = 'button';
       d.text = text || labelOf(e).slice(0, 80);
       if (tag === 'a') d.href = (e.getAttribute('href') || '').slice(0, 80);
     } else {
-      d.label = labelOf(e).replace(/\s+/g, ' ').slice(0, 120);
+      // a radio's own label is just "Yes"/"No": add the group's question (after it, so a cut keeps the answer)
+      const q = e.type === 'radio' && e.closest('fieldset')?.querySelector('legend')?.innerText.trim();
+      d.label = (labelOf(e) + (q ? ' — ' + q : '')).replace(/\s+/g, ' ').slice(0, 120);
       if (e.required || e.getAttribute('aria-required') === 'true') d.required = true;
       if (tag === 'select') { d.options = [...e.options].map(o => o.text.trim()).slice(0, 25); d.value = e.selectedOptions[0]?.text || ''; }
       else if (['checkbox', 'radio'].includes(e.type)) d.checked = e.checked;
@@ -362,12 +370,20 @@ async def _act(page, frames: Dict[str, Any], action: Dict[str, Any], files: Dict
         await options.filter(has_text=pick).first.click(timeout=5_000)
         return f"choose {el_id} = {pick!r}"
     elif kind == "check":
-        await el.check(timeout=5_000)
+        try:
+            await el.check(timeout=5_000)
+        except Exception:  # styled checkbox/radio: the real input is hidden or covered, its label takes the click
+            await el.evaluate("e => (e.labels && e.labels[0] || e).click()")
     elif kind == "upload":
         path = files.get(action.get("file") or "resume")
         if not path:
             return f"upload {el_id}: no {action.get('file')} file"
-        await el.set_input_files(path, timeout=8_000)
+        if await el.evaluate("e => e.tagName === 'INPUT'"):
+            await el.set_input_files(path, timeout=8_000)
+        else:  # an "Add file" button that opens the file dialog
+            async with frame.page.expect_file_chooser(timeout=8_000) as chooser:
+                await el.click(timeout=8_000)
+            await (await chooser.value).set_files(path)
     elif kind == "press":
         await el.press(value or "Enter", timeout=5_000)
     else:

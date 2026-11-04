@@ -5,7 +5,7 @@ description: Be the brain of the app's job-application agent - answer its form-f
 
 # Apply jobs (you are the agent's brain)
 
-The app (backend on port 8000, auto-apply on) opens each job page in its own browser. For every step it
+The app (backend on port 8317, auto-apply on) opens each job page in its own browser. For every step it
 sends a prompt: the job, the candidate, the page's visible text and elements, and the exact JSON reply
 format. You answer that JSON; the app does the clicking and typing. Nothing else is needed from you.
 

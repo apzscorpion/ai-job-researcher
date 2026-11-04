@@ -216,7 +216,7 @@ export default function Applications() {
     setLinkErr(''); setLinkBusy(true)
     const tab = window.open('', '_blank')
     try {
-      await assistApi.fromLink({ url: link.trim(), review })
+      await assistApi.fromMessage({ text: link.trim(), review })
       setLink('')
       openLive(tab)
     } catch (err) { tab?.close(); setLinkErr(err.message) }
@@ -303,11 +303,13 @@ export default function Applications() {
 
       <NeedsYouReport onRetried={loadApps} />
 
-      {/* ── Fill an application from a link ────────────────── */}
+      {/* ── Tell the AI: a link, a company's reply, or what to do ──────────────── */}
       <form className="fill-link" onSubmit={fillFromLink}>
-        <input className="form-control" type="url" required aria-label="Application link" style={{ flex: '1 1 380px' }}
-          placeholder="Paste any job or application link (Greenhouse, Lever, Workday, company careers page…)"
-          value={link} onChange={e => setLink(e.target.value)} />
+        <textarea className="form-control" required rows={3} aria-label="Message for the AI" style={{ flex: '1 1 380px' }}
+          placeholder={'Paste a job link, or a company\'s reply ("please don\'t email us — apply at careers.acme.com"), '
+            + 'or tell the AI what to apply to. Ctrl+Enter to send.'}
+          value={link} onChange={e => setLink(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) fillFromLink(e) }} />
         <button className="btn btn-primary btn-sm" disabled={linkBusy || !link.trim()}>
           {linkBusy ? 'Opening…' : '🤖 Fill with AI'}
         </button>

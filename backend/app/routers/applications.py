@@ -4,6 +4,7 @@ Applications router: list with rich filtering, single view, status update, and d
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -217,6 +218,74 @@ async def apply_from_link(
         session.commit()
         session.refresh(app)
     return _start_assist(current_user, app, body.review)
+
+
+class MessageBody(BaseModel):
+    text: str = Field(..., min_length=3, max_length=20_000)
+    review: bool = False
+
+
+_JOB_LINK = re.compile(r"career|job|apply|vacanc|position|opening|recruit", re.I)
+
+
+def best_message_link(text: str) -> Optional[str]:
+    """The application link in a pasted message: an ATS link first, then careers/jobs pages, then any link."""
+    from app.security import check_public_url
+    from app.services.site_apply import detect_ats
+
+    urls = []
+    for u in re.findall(r"https?://[^\s<>\"'()\[\]]+", text):
+        u = u.rstrip(".,;:!?")
+        try:
+            check_public_url(u, ("https", "http"))
+            urls.append(u)
+        except ValueError:
+            pass
+    return max(urls, key=lambda u: (bool(detect_ats(u)), bool(_JOB_LINK.search(u))), default=None)
+
+
+def message_application(text: str, rows) -> Optional[tuple]:
+    """Which (application, job) a pasted reply is about: the company's name or the address we emailed in it."""
+    low = text.lower()
+    for app, job in sorted(rows, key=lambda r: r[0].method != "email"):  # bounces answer emailed applications
+        domain = (app.sent_to or "").rpartition("@")[2].lower() if "@" in (app.sent_to or "") else ""
+        if (len(job.company or "") > 2 and job.company.lower() in low) or (domain and domain in low):
+            return app, job
+    return None
+
+
+@router.post("/from-message")
+async def apply_from_message(
+    body: MessageBody,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+) -> Dict[str, Any]:
+    """Paste a reply ("don't email us — apply on our careers page"), a link or an instruction: the AI applies there."""
+    import asyncio
+
+    from app.services.email_finder import _search_company_site
+
+    rows = session.exec(select(Application, Job).join(Job, Job.id == Application.job_id)
+                        .where(Application.user_id == current_user.id)
+                        .order_by(col(Application.applied_at).desc())).all()
+    match = message_application(body.text, rows)
+    url = best_message_link(body.text)
+    if not url and match:  # no link in the reply: find the company's careers page ourselves
+        host, pages = await asyncio.to_thread(_search_company_site, match[1].company)
+        url = next((p for p in pages if _JOB_LINK.search(p)), f"https://{host}/careers" if host else None)
+    if not url:
+        raise HTTPException(status_code=422, detail="I couldn't find a link in that, or tell which company it's about "
+                                                    "— paste the careers page link too.")
+    if not match:
+        return {**await apply_from_link(LinkBody(url=url, review=body.review), current_user, session), "url": url}
+    app, job = match
+    job.apply_url = url
+    app.method, app.status = "site", "needs_manual"  # the email didn't count: the company wants its own form
+    app.notes = f"{job.company} asked to apply on their site instead of by email — the AI is applying at {url}"
+    session.add(job)
+    session.add(app)
+    session.commit()
+    return {**_start_assist(current_user, app, body.review), "url": url, "company": job.company, "title": job.title}
 
 
 @router.get("/assist/status")
