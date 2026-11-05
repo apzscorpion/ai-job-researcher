@@ -141,7 +141,7 @@ def quota_status(settings: Any) -> List[Dict[str, Any]]:
         blocked = [{"model": m, "why": _block_why.get(_slot(p["key"], m), ""),
                     "minutes": int((_blocked[_slot(p["key"], m)] - now) // 60) + 1}
                    for m in models if _blocked.get(_slot(p["key"], m), 0.0) > now]
-        out.append({"name": _provider_name(p), "label": p.get("name") or "", "models": len(models),
+        out.append({"id": p.get("id"), "name": _provider_name(p), "label": p.get("name") or "", "models": len(models),
                     "blocked": blocked, "out": len(blocked) == len(models)})
     return out
 

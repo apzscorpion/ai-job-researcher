@@ -34,6 +34,8 @@ _MIN_GAP_S = 120
 
 # Statuses that are not (yet) a real application attempt
 NOT_ATTEMPTED = ("queued", "draft")
+# A job that stopped taking applications: cancelled, never "waiting for you"
+CLOSED_RX = r"expired|no longer accepting|not currently accepting|job is closed"
 
 _scheduler = None  # APScheduler instance
 
@@ -195,6 +197,17 @@ def platform_ready(platform: str, paused: Dict[str, str], applied_today: int,
     if platform in paused or applied_today >= PLATFORM_DAILY_CAP.get(platform, 10**6):
         return False
     return last_ts is None or (now - last_ts).total_seconds() >= gap_s
+
+
+def prioritize(items: list, order: List[str], places: List[str], only: bool) -> list:
+    """(app, job) pairs in the user's group order (stable: score order within a group); only=True drops the rest."""
+    from app.services.regions import priority_rank
+
+    if not order:
+        return items
+    ranked = [(priority_rank(job, order, places), app, job) for app, job in items]
+    ranked = [r for r in ranked if not only or r[0] < len(order)]
+    return [(app, job) for _rank, app, job in sorted(ranked, key=lambda r: r[0])]
 
 
 def route_for(job) -> str:
@@ -375,6 +388,11 @@ async def _apply_one(session, app, job, user_id: int, settings, profile, user_em
         if found:
             job.recruiter_email, route, app.method = found, "email", "email"
             session.add(job)
+    from app.models import json_decode
+
+    if route == "email" and (job.recruiter_email or "").split("@")[-1].lower() in json_decode(settings.no_email_domains, []):
+        # this company replied "apply on our site": use the job page instead
+        route = app.method = job.source if job.source in PLATFORM_DAILY_CAP else "site"
     try:
         if route == "email":
             status, note = await _apply_email(app, job, profile, settings, providers, job.recruiter_email)
@@ -401,6 +419,8 @@ async def _apply_one(session, app, job, user_id: int, settings, profile, user_em
         logger.exception("scheduler: apply failed for user_id=%s job_id=%s", user_id, job.id)
         status, note = "failed", f"Unexpected error while applying. Apply here: {job.url}"
 
+    if status in ("needs_manual", "failed") and re.search(CLOSED_RX, note or "", re.I):
+        status = "cancelled"  # nothing anyone can do about a closed job
     if status == "needs_manual":
         _notify(session, user_id, "apply_needs_you", job, note)  # in-app only: no email per job
     elif status == "draft":
@@ -477,6 +497,11 @@ async def _process_apply_queue() -> None:
             ):
                 continue
 
+            from app.models import json_decode
+            from app.services.regions import home_places
+            items = prioritize(items, json_decode(settings.apply_priority, []),
+                               home_places(json_decode(settings.home_places, []), profile.location),
+                               settings.priority_only)
             paused = active_pauses(settings.platform_pauses, now_utc)
             busy = {_group(j, a.method) for a, j in session.exec(
                 select(Application, Job).join(Job, Application.job_id == Job.id)
@@ -506,7 +531,7 @@ async def _process_apply_queue() -> None:
             session.commit()
             # Different platforms apply at the same time, each in its own browser and DB session
             for app, route, group in chosen:
-                task = asyncio.create_task(apply_now(app.id, route, find_email=True))
+                task = asyncio.create_task(apply_now(app.id, route))  # no guessed inboxes: companies reply "apply on our site"
                 _tasks.add(task)
                 task.add_done_callback(_tasks.discard)
                 task.add_done_callback(lambda _t, k=(user_id, group): _group_done.__setitem__(k, time.monotonic()))

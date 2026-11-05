@@ -21,3 +21,11 @@ def test_matches_the_emailed_application():
     assert message_application(REPLY, [site, other, emailed]) == emailed  # the emailed one first
     assert message_application("from hr@acme.com: apply online", [other, emailed]) == emailed
     assert message_application("unrelated text", [other, emailed]) is None
+
+
+def test_stop_reasons():
+    from app.routers.applications import reason_of
+    assert reason_of("The AI agent was stuck: the page didn't change in 4 steps") == "stuck"
+    assert reason_of('This job is closed: the page says "Not currently accepting applications".') == "closed"
+    assert reason_of("The site asked for a captcha / human check.") == "captcha"
+    assert reason_of("The AI agent got no usable reply (AI quota?).") == "ai_quota"

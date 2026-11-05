@@ -5,6 +5,7 @@ import {
   getNotifications, markNotificationsSeen,
 } from '../api'
 import Spinner from '../components/Spinner'
+import AutoApplyOptions from '../components/AutoApplyOptions'
 import StatusBadge, { CHANNELS } from '../components/StatusBadge'
 
 function formatTime(ts) {
@@ -298,6 +299,8 @@ export default function Dashboard() {
                 </div>
               </div>
               <AutoApplyStatus r={stats.readiness} onSettings={() => navigate('/settings')} />
+              <AutoApplyOptions autoApply={autoApply} onSettings={() => navigate('/settings')}
+                onSaved={patch => 'auto_apply_enabled' in patch && setAutoApply(patch.auto_apply_enabled)} />
             </>
           )
       }

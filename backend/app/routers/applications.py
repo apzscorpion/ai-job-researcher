@@ -15,8 +15,8 @@ from sqlmodel import Session, col, func, or_, select
 from app.auth import get_current_user
 from app.db import get_session
 from app import crypto
-from app.models import ActivityLog, Application, Job, Settings, User
-from app.services.scheduler import NOT_ATTEMPTED, local_day_start_utc, user_tz
+from app.models import ActivityLog, Application, Job, Settings, User, json_decode, json_encode
+from app.services.scheduler import CLOSED_RX, NOT_ATTEMPTED, local_day_start_utc, user_tz
 
 router = APIRouter(prefix="/api/applications", tags=["applications"])
 
@@ -279,6 +279,12 @@ async def apply_from_message(
     if not match:
         return {**await apply_from_link(LinkBody(url=url, review=body.review), current_user, session), "url": url}
     app, job = match
+    if app.sent_to and "@" in app.sent_to:  # never email this company again
+        settings = session.exec(select(Settings).where(Settings.user_id == current_user.id)).first()
+        if settings:
+            domains = json_decode(settings.no_email_domains, [])
+            settings.no_email_domains = json_encode(sorted({*domains, app.sent_to.split("@")[1].lower()}))
+            session.add(settings)
     job.apply_url = url
     app.method, app.status = "site", "needs_manual"  # the email didn't count: the company wants its own form
     app.notes = f"{job.company} asked to apply on their site instead of by email — the AI is applying at {url}"
@@ -402,8 +408,9 @@ def mark_applied(
 # Why an application stopped, in plain words. First match wins; ai_can = retrying lets the AI finish it.
 REASONS = [
     ("unconfirmed", r"no confirmation", "Sent, but the site didn't confirm",
-     "The AI pressed Submit but no 'thank you' page appeared.", "Check your email for a confirmation.", False),
-    ("closed", r"expired|no longer accepting|not currently accepting|job is closed", "Job closed",
+     "The AI pressed Submit but no 'thank you' page appeared.",
+     "Retry: the AI reopens the job and marks it applied if the site shows it as applied.", True),
+    ("closed", CLOSED_RX, "Job closed",
      "The employer stopped taking applications.", "Nothing to do — cancel it.", False),
     ("captcha", r"captcha|cloudflare|verify you are human|human verification", "Human check (captcha)",
      "The site asked to prove a person is there; the AI never solves these.",
@@ -411,6 +418,9 @@ REASONS = [
     ("account", r"sign.?up|account creation|create an account|needs an account|log ?in|password|authentication",
      "Needs an account on the site", "The site wants you to sign up or log in, and the AI never creates "
      "accounts or types passwords.", "Sign up there once, then retry — or apply there yourself.", False),
+    ("stuck", r"agent was stuck|page didn't change", "AI got stuck on the form (fixed)",
+     "A button, Yes/No question or file upload the AI couldn't use.",
+     "Retry: hidden radio buttons, 'Add file' buttons, styled checkboxes and Naukri's chat now work.", True),
     ("ai_quota", r"AI quota|no usable reply", "AI ran out of quota",
      "Every AI key was used up while it was filling the form.", "Retry when the AI quota is back (see the header).", True),
     ("blank_page", r"about:blank|blank page|no job posting url|no url",
@@ -453,6 +463,25 @@ def needs_you_report(
         g["count"] += 1
         g["jobs"].append({"id": app.id, "title": job.title, "company": job.company})
     return sorted(groups.values(), key=lambda g: (not g["ai_can"], -g["count"]))
+
+
+@router.post("/report/resolve")
+def resolve_all(
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+) -> Dict[str, Any]:
+    """Let the AI handle everything it can: closed jobs are cancelled, the rest it can fix go back in the queue.
+    Captchas and logins stay with the user."""
+    ai_can = {k for k, *_, a in REASONS if a} | {"other"}
+    retry, closed = [], 0
+    for app, _job in _stuck(current_user.id, session):
+        why = reason_of(app.notes)
+        if why == "closed":
+            app.status, closed = "cancelled", closed + 1
+            session.add(app)
+        elif why in ai_can:
+            retry.append(app)
+    return {**_requeue(retry, current_user.id, session), "cancelled": closed}
 
 
 @router.post("/report/{key}/retry")

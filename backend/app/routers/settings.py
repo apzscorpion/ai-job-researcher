@@ -17,9 +17,10 @@ from sqlmodel import Session, select
 from app.auth import get_current_user
 from app import crypto
 from app.db import get_session
-from app.models import Settings, User, json_decode, json_encode
+from app.models import Profile, Settings, User, json_decode, json_encode
 from app.security import check_public_host, check_public_url
-from app.services.llm import ai_mode
+from app.services.llm import ai_mode, quota_status
+from app.services.regions import PRIORITY_GROUPS, home_places
 from app.services.scheduler import user_tz
 
 Short = Annotated[str, Field(max_length=200)]
@@ -46,7 +47,7 @@ class ProviderIn(BaseModel):
     base_url: Short = ""
     model: Short = ""
     account: Short = ""  # which account the key belongs to (the user's label; APIs don't tell)
-    active: bool = True  # inactive keys are kept but never used; at most one Gemini key is active
+    active: bool = True  # inactive keys are kept but never used
     key: Annotated[str, Field(max_length=500)] = ""  # empty or masked = keep the stored key for this id
 
 
@@ -67,7 +68,6 @@ def _merge_providers(s: Settings, incoming: List[ProviderIn]) -> List[Dict[str, 
     """New provider list; blank keys keep the stored key of the same id."""
     stored = {p["id"]: p for p in _providers(s) if p.get("id")}
     merged = []
-    gemini_active = False
     for p in incoming:
         if p.kind == "openai":
             # The server calls this URL with the key: only public https APIs, never the server's own network
@@ -83,12 +83,9 @@ def _merge_providers(s: Settings, incoming: List[ProviderIn]) -> List[Dict[str, 
         key = p.key.strip() if p.key.strip() and not p.key.startswith("…") else stored.get(pid, {}).get("key", "")
         if not key:
             raise HTTPException(status_code=422, detail=f"API key is required for {p.name or p.kind}")
-        # one Gemini key at a time: the first one marked active wins, the others are switched off
-        active = p.active and not (p.kind == "gemini" and gemini_active)
-        gemini_active |= p.kind == "gemini" and active
         merged.append({"id": pid, "kind": p.kind, "name": p.name.strip() or p.kind.title(),
                        "base_url": p.base_url.strip(), "model": p.model.strip(),
-                       "account": p.account.strip(), "active": active, "key": key})
+                       "account": p.account.strip(), "active": p.active, "key": key})
     return merged
 
 
@@ -111,6 +108,10 @@ def _settings_to_dict(s: Settings) -> Dict[str, Any]:
         "auto_send_email": s.auto_send_email,
         "target_locations": json_decode(s.target_locations, []),
         "remote_ok": s.remote_ok,
+        "apply_priority": json_decode(s.apply_priority, []),
+        "home_places": json_decode(s.home_places, []),
+        "priority_only": s.priority_only,
+        "priority_groups": PRIORITY_GROUPS,
         "min_salary": s.min_salary,
         "min_rating": s.min_rating,
         "excluded_companies": json_decode(s.excluded_companies, []),
@@ -143,7 +144,10 @@ def get_settings(
 ) -> Dict[str, Any]:
     s = _get_settings(current_user.id, session)
     _fold_gemini_key(s, session)
-    return _settings_to_dict(s)
+    profile = session.exec(select(Profile).where(Profile.user_id == current_user.id)).first()
+    # shown as the default "my district" when the user hasn't typed one
+    return {**_settings_to_dict(s), "home_places_auto": ", ".join(home_places([], profile and profile.location)),
+            "ai_quota": quota_status(s)}  # per key: which models are out of quota right now
 
 
 # ---------------------------------------------------------------------------
@@ -164,6 +168,9 @@ class SettingsUpdate(BaseModel):
     auto_send_email: Optional[bool] = None
     target_locations: Optional[Annotated[List[Short], Field(max_length=20)]] = None
     remote_ok: Optional[bool] = None
+    apply_priority: Optional[Annotated[List[Literal[tuple(PRIORITY_GROUPS)]], Field(max_length=5)]] = None
+    home_places: Optional[Annotated[List[Short], Field(max_length=20)]] = None
+    priority_only: Optional[bool] = None
     min_salary: Optional[Annotated[int, Field(ge=0, le=100_000_000)]] = None
     min_rating: Optional[Annotated[float, Field(ge=0, le=5)]] = None
     excluded_companies: Optional[Annotated[List[Short], Field(max_length=200)]] = None
@@ -225,6 +232,12 @@ def update_settings(
         s.target_locations = json_encode(body.target_locations)
     if body.remote_ok is not None:
         s.remote_ok = body.remote_ok
+    if body.apply_priority is not None:
+        s.apply_priority = json_encode(list(dict.fromkeys(body.apply_priority)))  # drop repeats, keep order
+    if body.home_places is not None:
+        s.home_places = json_encode([p.strip() for p in body.home_places if p.strip()])
+    if body.priority_only is not None:
+        s.priority_only = body.priority_only
     if body.min_salary is not None:
         s.min_salary = body.min_salary
     if body.min_rating is not None:

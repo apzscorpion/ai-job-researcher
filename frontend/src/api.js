@@ -302,6 +302,11 @@ export async function getNeedsYouReport() {
   return apiFetch('/applications/report')
 }
 
+// Closed jobs cancelled, everything the AI can fix queued again; captchas and logins stay
+export async function resolveAllWithAi() {
+  return apiFetch('/applications/report/resolve', { method: 'POST' })
+}
+
 export async function retryReason(key) {
   return apiFetch(`/applications/report/${encodeURIComponent(key)}/retry`, { method: 'POST' })
 }

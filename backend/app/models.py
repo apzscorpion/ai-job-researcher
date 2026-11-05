@@ -123,6 +123,13 @@ class Settings(SQLModel, table=True):
     target_titles: str = Field(default="[]")
     target_locations: str = Field(default="[]")
     remote_ok: bool = Field(default=True)
+    # Auto-apply order: JSON list of regions.PRIORITY_GROUPS keys, first = applied first; [] = by score
+    apply_priority: str = Field(default="[]")
+    # JSON list: the user's district and towns in it ("Pathanamthitta", "Thiruvalla", ...)
+    home_places: str = Field(default="[]")
+    priority_only: bool = Field(default=False)  # apply only to jobs in a ranked group
+    # JSON list of email domains that replied "apply on our site": never emailed again
+    no_email_domains: str = Field(default="[]")
 
     # Salary / rating filters
     min_salary: int = Field(default=0)

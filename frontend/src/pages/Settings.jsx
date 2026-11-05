@@ -6,6 +6,8 @@ import {
 import Spinner from '../components/Spinner'
 import KeyField from '../components/KeyField'
 import AiModePicker from '../components/AiModePicker'
+import AutoApplyOptions from '../components/AutoApplyOptions'
+import Toast from '../components/Toast'
 
 // ---------------------------------------------------------------------------
 // Helper toggle
@@ -34,6 +36,17 @@ function Section({ title, icon, children }) {
       {children}
     </div>
   )
+}
+
+// One key's quota right now: fine, partly limited (some models), or out until a time
+function KeyQuota({ q, active }) {
+  if (!active || !q) return null
+  const mins = q.blocked.length ? Math.min(...q.blocked.map(b => b.minutes)) : 0
+  const when = mins >= 90 ? `~${Math.round(mins / 60)} h` : `~${mins} min`
+  if (q.out) return <span className="badge badge-error" title={q.blocked[0]?.why}>⛔ Out of quota — back in {when}</span>
+  if (q.blocked.length) return <span className="badge badge-warning" title={q.blocked.map(b => `${b.model}: ${b.why}`).join('; ')}>
+    ⚠️ {q.blocked.length} of {q.models} models limited</span>
+  return <span className="badge badge-success">✓ Quota OK</span>
 }
 
 // Starting points for extra AI providers; model names change, so check the provider's docs
@@ -77,6 +90,12 @@ export default function Settings() {
 
 
   const [providers, setProviders]   = useState([])
+  const [quota, setQuota]           = useState([])
+  // quota changes while the app runs: refresh just the badges every minute
+  useEffect(() => {
+    const t = setInterval(() => getSettings().then(d => setQuota(d.ai_quota || [])).catch(() => {}), 60_000)
+    return () => clearInterval(t)
+  }, [])
   const [providerPreset, setProviderPreset] = useState('groq')
   const [provSaving, setProvSaving] = useState(false)
   const [provMsg, setProvMsg]       = useState('')
@@ -140,6 +159,7 @@ export default function Settings() {
       })
       // AI
       setProviders(data.ai_providers || [])
+      setQuota(data.ai_quota || [])
       setAiMode(data.ai_mode || 'semi_ai')
       setAnswers(data.standard_answers || {})
       // Prefs
@@ -234,11 +254,9 @@ export default function Settings() {
     finally { setProvSaving(false) }
   }
 
-  // Switch a key on/off right away; turning a Gemini key on turns the other Gemini keys off
+  // Switch a key on/off right away (every active key is used, top to bottom)
   async function handleActivate(i, on) {
-    const gem = providers[i].kind === 'gemini'
-    const next = providers.map((p, j) => j === i ? { ...p, active: on }
-      : (on && gem && p.kind === 'gemini') ? { ...p, active: false } : p)
+    const next = providers.map((p, j) => j === i ? { ...p, active: on } : p)
     setProviders(next)
     if (!next[i].id) return  // not saved yet: applies with "Save keys"
     setProvMsg(''); setProvErr('')
@@ -246,8 +264,7 @@ export default function Settings() {
       const data = await updateSettings({ ai_providers: next.filter(p => p.id) })
       setProviders([...(data.ai_providers || []), ...next.filter(p => !p.id)])
       const name = next[i].name || 'This key'
-      setProvMsg(gem && on ? `“${name}” is now the Gemini key used for all Gemini calls.`
-                           : `“${name}” is ${on ? 'active' : 'switched off — kept but not used'}.`)
+      setProvMsg(`“${name}” is ${on ? 'active' : 'switched off — kept but not used'}.`)
     } catch (err) { setProvErr(err.message) }
   }
 
@@ -300,8 +317,7 @@ export default function Settings() {
         apply_start_hour:      Number(prefs.apply_start_hour),
         apply_end_hour:        Number(prefs.apply_end_hour),
         search_interval_hours: Number(prefs.search_interval_hours),
-        auto_apply_enabled:    prefs.auto_apply_enabled,
-        timezone:              prefs.timezone,
+        timezone:              prefs.timezone,  // auto-apply on/off is in the Auto-apply options card
       })
       setPrefMsg('Search preferences saved!')
       setTimeout(() => setPrefMsg(''), 4000)
@@ -362,8 +378,13 @@ export default function Settings() {
   if (loading) return <Spinner text="Loading settings…" />
   if (error)   return <div className="alert alert-error">⚠️ {error}</div>
 
+  // the latest save result of any section, pinned in view (the section's own message may be scrolled away)
+  const toastErr = smtpErr || testEmailErr || provErr || ansErr || prefErr || exclErr || connectErr
+  const toastMsg = smtpMsg || testEmailMsg || provMsg || ansMsg || prefMsg || exclMsg
+
   return (
     <div>
+      <Toast text={toastErr || toastMsg} error={!!toastErr} />
       <div className="page-header">
         <h1 className="page-title">Settings</h1>
       </div>
@@ -451,8 +472,8 @@ export default function Settings() {
           Used for scoring, cover letters, emails, form answers and the AI site agent — tried top to bottom; when
           one runs out of quota the next takes over, and your PC's local model is the last resort. 👁 shows a
           saved key, 🧪 Test sends one tiny request and shows the provider's answer (works before saving too),
-          🗑 deletes. Only one Gemini key is active at a time (the radio button) — add more Gemini keys and pick
-          which one is used; switched-off keys are kept but never used. Keys are stored encrypted. Most providers can't tell which account a key belongs to, so put
+          🗑 deletes. Add as many Gemini keys as you like: when one is out of quota the next one in the list is used.
+          Switched-off keys are kept but never used. Keys are stored encrypted. Most providers can't tell which account a key belongs to, so put
           it in the label.
         </p>
         {provMsg && <div className="alert alert-success">✅ {provMsg}</div>}
@@ -469,17 +490,12 @@ export default function Settings() {
                       placeholder="Label (e.g. Gemini – personal Gmail)"
                       value={p.name} onChange={e => editProvider(i, 'name', e.target.value)} />
                     <span className="badge badge-info">{p.kind === 'gemini' ? 'Gemini' : 'OpenAI-compatible'}</span>
-                    {p.kind === 'gemini'
-                      ? <label className="key-active" title="Only one Gemini key is used at a time">
-                          <input type="radio" name="gemini-active" checked={p.active !== false}
-                            onChange={() => handleActivate(i, true)} />
-                          {p.active !== false ? 'Active — used for Gemini calls' : 'Use this Gemini key'}
-                        </label>
-                      : <label className="key-active">
-                          <input type="checkbox" checked={p.active !== false}
-                            onChange={e => handleActivate(i, e.target.checked)} />
-                          {p.active !== false ? 'Active' : 'Off'}
-                        </label>}
+                    <label className="key-active">
+                      <input type="checkbox" checked={p.active !== false}
+                        onChange={e => handleActivate(i, e.target.checked)} />
+                      {p.active !== false ? 'Active' : 'Off'}
+                    </label>
+                    <KeyQuota q={quota.find(q => q.id === p.id)} active={p.active !== false} />
                     {!p.id && <span className="badge badge-warning">not saved</span>}
                     <button type="button" className="btn btn-danger btn-sm" aria-label={`Delete ${p.name}`}
                       onClick={() => handleKeyDelete(i)}>🗑 Delete</button>
@@ -560,6 +576,8 @@ export default function Settings() {
       </Section>
 
       {/* ── Search & Scoring Prefs ───────────────────────── */}
+      <AutoApplyOptions />
+
       <Section title="Search & Scoring Preferences" icon="🎯">
         {prefMsg && <div className="alert alert-success">✅ {prefMsg}</div>}
         {prefErr && <div className="alert alert-error">⚠️ {prefErr}</div>}
@@ -633,7 +651,6 @@ export default function Settings() {
           </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1.25rem', marginBottom: '1rem' }}>
             <Toggle label="Search remote jobs worldwide (priority)" checked={prefs.remote_ok}           onChange={v => setPrefs(p => ({ ...p, remote_ok: v }))} />
-            <Toggle label="Auto-Apply Enabled"   checked={prefs.auto_apply_enabled}  onChange={v => setPrefs(p => ({ ...p, auto_apply_enabled: v }))} />
           </div>
           <button type="submit" className="btn btn-primary" disabled={prefSaving}>
             {prefSaving ? <><Spinner size="sm" /> Saving…</> : '💾 Save Preferences'}

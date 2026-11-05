@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react'
-import { getNeedsYouReport, retryReason } from '../api'
+import { getNeedsYouReport, resolveAllWithAi, retryReason } from '../api'
 
 // "Why jobs need you": stopped applications grouped by cause, what happens next, and a Retry for the
 // causes the AI can now handle itself.
@@ -19,6 +19,16 @@ export default function NeedsYouReport({ onRetried }) {
     } catch (err) { alert(`Couldn't retry: ${err.message}`) } finally { setBusy('') }
   }
 
+  async function resolveAll() {
+    setBusy('all')
+    try {
+      const res = await resolveAllWithAi()
+      alert(`The AI is retrying ${res.requeued} application(s); ${res.cancelled} closed job(s) were cancelled. `
+        + 'Captchas and logins still need you.')
+      load(); onRetried?.()
+    } catch (err) { alert(`Couldn't hand them to the AI: ${err.message}`) } finally { setBusy('') }
+  }
+
   if (!groups.length) return null
   const total = groups.reduce((n, g) => n + g.count, 0)
   const aiCan = groups.filter(g => g.ai_can).reduce((n, g) => n + g.count, 0)
@@ -27,6 +37,11 @@ export default function NeedsYouReport({ onRetried }) {
       <summary>
         📋 <strong>Why {total} application{total === 1 ? '' : 's'} stopped</strong> — {aiCan} the AI can retry, {total - aiCan} need you
       </summary>
+      {aiCan > 0 && (
+        <button className="btn btn-primary" style={{ margin: '0.5rem 0' }} disabled={busy === 'all'} onClick={resolveAll}>
+          {busy === 'all' ? 'Handing over…' : `🤖 Let the AI handle all ${aiCan + (groups.find(g => g.key === 'closed')?.count || 0)}`}
+        </button>
+      )}
       <ul>
         {groups.map(g => (
           <li key={g.key} className={g.ai_can ? 'ai-can' : 'needs-you'}>

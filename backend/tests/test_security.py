@@ -63,7 +63,7 @@ def test_reveal_and_key_test_need_login():
     assert client.post("/api/settings/keys/test", json={"kind": "gemini"}).status_code == 401
 
 
-def test_only_one_gemini_key_is_active_and_inactive_keys_are_unused():
+def test_every_active_gemini_key_is_used_in_order_and_inactive_keys_are_not():
     import json
     from types import SimpleNamespace
 
@@ -77,9 +77,9 @@ def test_only_one_gemini_key_is_active_and_inactive_keys_are_unused():
         ProviderIn(kind="gemini", name="G2", key="AIza-two", active=True),
         ProviderIn(kind="openai", name="OR", key="sk-x", base_url="https://1.1.1.1/v1", model="m", active=False),
     ])
-    assert [p["active"] for p in merged] == [True, False, False]
+    assert [p["active"] for p in merged] == [True, True, False]
     s.ai_providers_enc = crypto.encrypt(json.dumps(merged))
-    assert [p["name"] for p in providers_for(s)] == ["G1"]
+    assert [p["name"] for p in providers_for(s)] == ["G1", "G2"]  # G2 takes over when G1 is out
 
 
 def test_cancel_keeps_the_application_with_the_ai_reason():

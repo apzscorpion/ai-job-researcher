@@ -7,6 +7,7 @@ region_clause(region) -> SQL condition on Job (None when the value is unknown)
 
 from __future__ import annotations
 
+import re
 from typing import Dict, List, Optional
 
 from sqlalchemy import func
@@ -60,6 +61,47 @@ PARKS: Dict[str, List[str]] = {
 }
 
 _INDIA_WORDS = sorted({"india", *(w for words in STATES.values() for w in words)})
+
+
+# Auto-apply priority groups, in the order the user ranks them (Settings.apply_priority)
+PRIORITY_GROUPS: Dict[str, str] = {
+    "remote_district": "Remote, based in my district",
+    "district": "Office jobs in my district",
+    "remote_india": "Remote in India",
+    "hybrid": "Hybrid",
+    "remote_abroad": "Remote outside India",
+}
+_HYBRID = re.compile(r"\bhybrid\b(?! app)", re.I)
+
+
+def job_groups(job: Job, places: List[str]) -> set:
+    """Which priority groups a job falls in. places: the user's district and its towns."""
+    loc = (job.location or "").lower()
+    remote = job.is_remote or "remote" in loc
+    india = any(w in loc for w in _INDIA_WORDS) and "indiana" not in loc
+    in_district = any(p.strip().lower() in loc for p in places if p.strip())
+    groups = set()
+    if in_district:
+        groups.add("remote_district" if remote else "district")
+    if remote:
+        groups.add("remote_india" if india or in_district else "remote_abroad")
+    if _HYBRID.search(f"{loc} {job.title or ''}"):
+        groups.add("hybrid")
+    return groups
+
+
+def home_places(saved: List[str], profile_location: Optional[str]) -> List[str]:
+    """The user's own district list, else the district from their profile ("Pathanamthitta, Kerala")."""
+    district = (profile_location or "").split(",")[0].strip()
+    return saved or ([district] if district else [])
+
+
+def priority_rank(job: Job, order: List[str], places: List[str]) -> Optional[int]:
+    """Position of the job's best group in the user's order; len(order) when it's in none, None if unranked."""
+    if not order:
+        return None
+    hits = [order.index(g) for g in job_groups(job, places) if g in order]
+    return min(hits) if hits else len(order)
 
 
 def _any(text, words: List[str]):
